@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Creatio Case Lookup</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%94%8D%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">🔍</span>
+        <div>
+          <h1>Creatio Case Lookup</h1>
+          <p class="sub" id="baseUrlLabel">read-only</p>
+        </div>
+      </div>
+      <nav class="tabs">
+        <button class="tab active" data-tab="lookup">Lookup</button>
+        <button class="tab" data-tab="settings">Settings</button>
+      </nav>
+    </header>
+
+    <div id="authBanner" class="banner hidden">
+      <span></span>
+      <button class="link" data-goto="settings">Open Settings →</button>
+    </div>
+
+    <!-- ============================ LOOKUP ============================ -->
+    <main id="tab-lookup" class="tab-panel active">
+      <section class="card search">
+        <div class="field">
+          <label>1 · Select cases by</label>
+          <div class="segmented" id="modeSeg">
+            <button data-mode="owner" class="active">Assignee / owner</button>
+            <button data-mode="number">Case number</button>
+            <button data-mode="account">Account / school</button>
+            <button data-mode="recent">All recent</button>
+          </div>
+        </div>
+
+        <div class="field" id="valueField">
+          <label id="valueLabel">Owner name</label>
+          <div class="row">
+            <input id="valueInput" type="text" placeholder="e.g. Leyba" autocomplete="off" />
+            <button id="resolveBtn" class="secondary">Find</button>
+          </div>
+          <div id="candidates" class="candidates hidden"></div>
+          <p class="hint" id="valueHint">Type a name, then pick the right person.</p>
+        </div>
+
+        <div class="field">
+          <label>2 · Status</label>
+          <div class="chips" id="statusChips"></div>
+        </div>
+
+        <div class="field">
+          <label>3 · Include detail</label>
+          <div class="chips" id="detailChips">
+            <label class="chip"><input type="checkbox" value="summary" checked disabled />Summary</label>
+            <label class="chip"><input type="checkbox" value="description" />Full description</label>
+            <label class="chip"><input type="checkbox" value="timeline" />Conversation / timeline</label>
+            <label class="chip"><input type="checkbox" value="latest" />Latest update only</label>
+            <label class="chip"><input type="checkbox" value="extra" />Extra fields</label>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="searchBtn" class="primary">Search cases</button>
+          <span id="searchStatus" class="status"></span>
+        </div>
+        <div id="searchProgress" class="progress hidden">
+          <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+          <span class="progress-label" id="progressLabel"></span>
+        </div>
+      </section>
+
+      <section id="results" class="results"></section>
+    </main>
+
+    <!-- ============================ SETTINGS ============================ -->
+    <main id="tab-settings" class="tab-panel">
+      <section class="card">
+        <h2>Connection settings</h2>
+        <p class="hint">
+          These are saved to the app's <code>.env</code> file. Cookies take effect
+          on the next search — no restart needed. Base URL, allowlist and row cap
+          changes need an app restart.
+        </p>
+
+        <div class="field">
+          <label for="cfgBaseUrl">Creatio base URL</label>
+          <input id="cfgBaseUrl" type="text" placeholder="https://nelnet.creatio.com" />
+        </div>
+
+        <fieldset class="cookies">
+          <legend>Session cookies (SSO)</legend>
+          <p class="hint">
+            Get these from your browser after logging in to Creatio:
+            <strong>DevTools (F12) → Application → Cookies</strong> → your Creatio URL.
+            Copy the <em>values</em>. Leave a field blank to keep the current value.
+          </p>
+          <div class="field">
+            <label for="cfgAspx">.ASPXAUTH <span id="stAspx" class="pill"></span></label>
+            <input id="cfgAspx" type="password" placeholder="paste .ASPXAUTH value" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="cfgCsrf">BPMCSRF <span id="stCsrf" class="pill"></span></label>
+            <input id="cfgCsrf" type="password" placeholder="paste BPMCSRF value" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="cfgLoader">BPMLOADER <span id="stLoader" class="pill"></span> <span class="muted">(optional)</span></label>
+            <input id="cfgLoader" type="password" placeholder="paste BPMLOADER value" autocomplete="off" />
+          </div>
+          <label class="reveal"><input type="checkbox" id="revealCookies" /> Show cookie values</label>
+        </fieldset>
+
+        <div class="two-col">
+          <div class="field">
+            <label for="cfgAllowlist">Allowed entities</label>
+            <input id="cfgAllowlist" type="text" placeholder="Case, Activity, Contact, Account, SocialMessage" />
+          </div>
+          <div class="field">
+            <label for="cfgMaxTop">Max rows</label>
+            <input id="cfgMaxTop" type="number" min="1" max="500" placeholder="50" />
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="saveCfgBtn" class="primary">Save</button>
+          <button id="testCfgBtn" class="secondary">Test connection</button>
+          <span id="cfgStatus" class="status"></span>
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      Read-only · queries never modify Creatio data ·
+      <span id="footBase"></span>
+    </footer>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
