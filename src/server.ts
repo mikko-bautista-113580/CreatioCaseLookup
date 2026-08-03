@@ -45,6 +45,9 @@ import {
   type AnalyzableCase,
   type Preset,
 } from "./analyze.js";
+import { buildIndex, toAbs, isKnownFile, REPO_ROOT, type RepoIndex } from "./repoIndex.js";
+import { guessDistricts } from "./districtMap.js";
+import { triageCase, type CaseBrief } from "./triage.js";
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "public");
 const PORT = parseInt(process.env.CREATIO_APP_PORT || "3000", 10);
@@ -254,6 +257,58 @@ async function handleApi(
     return;
   }
 
+  // ---- Pipeline (Phase 1: triage) ----------------------------------------
+
+  // Index summary, so the UI can show what the tool can see.
+  if (req.method === "GET" && path === "/api/repo-index") {
+    try {
+      const refresh = url.searchParams.get("refresh") === "1";
+      const ix = await buildIndex(refresh);
+      sendJson(res, 200, {
+        root: REPO_ROOT,
+        builtAt: ix.builtAt,
+        districts: ix.districts.size,
+        files: ix.allFiles.size,
+        rootFiles: ix.rootFiles.length,
+        counts: ix.counts,
+      });
+    } catch (e) {
+      sendError(res, e);
+    }
+    return;
+  }
+
+  // Read one indexed repo file as plain text, so a candidate can be eyeballed
+  // without leaving the app. Serves ONLY paths present in the index.
+  if (req.method === "GET" && path === "/api/repo-file") {
+    const rel = url.searchParams.get("path") || "";
+    try {
+      const ix = await buildIndex();
+      if (!isKnownFile(ix, rel)) {
+        return sendJson(res, 404, { error: "not_found", message: "Not an indexed file." });
+      }
+      const abs = toAbs(rel);
+      if (!abs) {
+        return sendJson(res, 400, { error: "server", message: "Invalid path." });
+      }
+      const data = await readFile(abs, "utf8");
+      res.writeHead(200, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      res.end(data);
+    } catch (e) {
+      sendError(res, e);
+    }
+    return;
+  }
+
+  // Triage: cases -> validated candidate files (SSE).
+  if (req.method === "POST" && path === "/api/triage") {
+    await handleTriage(req, res);
+    return;
+  }
+
   sendJson(res, 404, { error: "not_found", message: `No API route ${req.method} ${path}` });
 }
 
@@ -401,6 +456,179 @@ async function handleAnalyze(req: IncomingMessage, res: ServerResponse): Promise
   );
 
   req.on("close", () => runner.kill());
+}
+
+// ---------------------------------------------------------------------------
+// Triage handler (Server-Sent Events)
+//
+// Ordering matters here: every Creatio read happens BEFORE any agent spawns.
+// Cookies expire in hours, and the agent runs are the slow part — front-loading
+// the network work means an expiry fails fast with nothing half-done.
+// ---------------------------------------------------------------------------
+const TRIAGE_MAX_CASES = 10; // ten sequential agent runs is already 10-20 min
+
+async function handleTriage(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: any;
+  try {
+    body = await readBody(req);
+  } catch (e) {
+    return sendError(res, e);
+  }
+
+  if (!claudeAvailable()) {
+    return sendJson(res, 400, {
+      error: "server",
+      message:
+        "The Claude CLI is not installed. Run `npm i -g @anthropic-ai/claude-code`, then `claude` once to log in.",
+    });
+  }
+
+  const mode = (body.mode as SelectMode) || "recent";
+  const statuses: string[] = Array.isArray(body.statuses) ? body.statuses : ["In progress"];
+  const limit = Math.max(1, Math.min(Number(body.maxCases) || TRIAGE_MAX_CASES, 25));
+
+  // Pre-flight: refuse to start on stale cookies rather than dying at case 7.
+  const conn = await testConnection();
+  if (!conn.ok) {
+    return sendJson(res, 401, {
+      error: "auth",
+      message: `Creatio is not reachable: ${conn.error || "unknown error"}`,
+    });
+  }
+
+  // 1. Find the cases.
+  let found: FindResult;
+  try {
+    found = await findCases({
+      mode,
+      guids: body.guids,
+      numbers: body.numbers,
+      statuses,
+      before: body.before,
+    });
+  } catch (e) {
+    return sendError(res, e);
+  }
+
+  const cases = found.cases.slice(0, limit);
+  if (!cases.length) {
+    return sendJson(res, 200, { error: "", message: "No matching cases.", cases: [] });
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  sse(res, "found", {
+    cases,
+    total: cases.length,
+    truncated: found.cases.length > cases.length,
+    caveats: found.caveats,
+  });
+
+  const aborted = { v: false };
+  let current: { kill: () => void } | null = null;
+  req.on("close", () => {
+    aborted.v = true;
+    current?.kill();
+  });
+
+  // 2. Fetch detail up front, bounded concurrency (matches handleCases).
+  const detailed: AnalyzableCase[] = cases.map((c) => ({ ...c }));
+  let idx = 0;
+  async function detailWorker(): Promise<void> {
+    while (idx < detailed.length && !aborted.v) {
+      const i = idx++;
+      try {
+        detailed[i].detail = await getCaseDetail(cases[i], [
+          "description",
+          "timeline",
+        ] as DetailKind[]);
+      } catch (e) {
+        if (e instanceof AuthError) {
+          sse(res, "error", { kind: "auth", message: e.message });
+          aborted.v = true;
+          return;
+        }
+        detailed[i].detail = {};
+      }
+      sse(res, "progress", { phase: "detail", done: i + 1, total: detailed.length });
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(4, detailed.length) }, () => detailWorker())
+  );
+  if (aborted.v) return void res.end();
+
+  // 3. Build the index (may take a second on a cold cache).
+  let ix: RepoIndex;
+  try {
+    sse(res, "progress", { phase: "index", message: "Indexing custom-reports…" });
+    ix = await buildIndex(false, (m) => sse(res, "progress", { phase: "index", message: m }));
+    sse(res, "indexed", {
+      districts: ix.districts.size,
+      files: ix.allFiles.size,
+      builtAt: ix.builtAt,
+    });
+  } catch (e) {
+    sse(res, "error", { kind: "index", message: e instanceof Error ? e.message : String(e) });
+    return void res.end();
+  }
+
+  // 4. Triage each case serially. Parallel CLI spawns rate-limit and make the
+  //    audit log interleave; reviewability beats throughput here.
+  for (let i = 0; i < detailed.length && !aborted.v; i++) {
+    const c = detailed[i];
+    const guesses = guessDistricts(ix, {
+      accountName: c.Account,
+      subject: c.Subject,
+      descriptionText: c.detail?.description || "",
+    });
+    sse(res, "progress", {
+      phase: "triage",
+      done: i,
+      total: detailed.length,
+      caseNumber: c.Number,
+    });
+
+    const brief = await new Promise<CaseBrief | null>((resolve) => {
+      current = triageCase(
+        { case: c, index: ix, guesses, model: process.env.CREATIO_APP_MODEL || undefined },
+        {
+          onDone: (b) => resolve(b),
+          onError: (err) => {
+            sse(res, "caseError", {
+              index: i,
+              caseNumber: c.Number,
+              kind: err.kind,
+              message: err.message,
+            });
+            resolve(null);
+          },
+        }
+      );
+    });
+    current = null;
+
+    if (brief) {
+      sse(res, "brief", {
+        index: i,
+        caseNumber: c.Number,
+        brief,
+        guesses: guesses.slice(0, 5).map((g) => ({
+          code: g.code,
+          score: g.score,
+          why: g.why,
+          subrepos: [...new Set(g.entries.map((e) => e.subrepo))],
+        })),
+      });
+    }
+    sse(res, "progress", { phase: "triage", done: i + 1, total: detailed.length });
+  }
+
+  if (!aborted.v) sse(res, "done", { total: detailed.length });
+  res.end();
 }
 
 // ---------------------------------------------------------------------------

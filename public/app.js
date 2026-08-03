@@ -828,6 +828,242 @@ async function testConn() {
 $("#testCfgBtn").addEventListener("click", testConn);
 
 // ---------------------------------------------------------------------------
+// Pipeline tab — case → candidate file triage (read-only)
+//
+// Everything rendered here derives from untrusted case text, so it all goes
+// through esc(). Nothing in this tab can edit, commit, or push anything.
+// ---------------------------------------------------------------------------
+const pipe = { mode: "recent", running: false, abort: null, briefs: [] };
+
+function setPipeMode(mode) {
+  pipe.mode = mode;
+  $$("#pipeModeSeg button").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+  $("#pipeNumberField").classList.toggle("hidden", mode !== "number");
+}
+$$("#pipeModeSeg button").forEach((b) =>
+  b.addEventListener("click", () => setPipeMode(b.dataset.mode))
+);
+
+function pipeProgress(on) { $("#pipeProgress").classList.toggle("hidden", !on); }
+function setPipeProgress(done, total, label) {
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  $("#pipeFill").style.width = pct + "%";
+  $("#pipeLabel").textContent = label || `${done} / ${total}`;
+}
+
+const CONF_DOT = { high: "●●●", medium: "●●○", low: "●○○" };
+
+function renderBriefCard(payload) {
+  const { caseNumber, brief, guesses } = payload;
+  const files = brief.candidateFiles || [];
+  const esc_ = esc;
+
+  const filesHtml = files.length
+    ? files
+        .map(
+          (f) => `
+        <li class="cand ${f.shared ? "shared" : ""}">
+          <span class="conf conf-${esc_(f.confidence)}" title="${esc_(f.confidence)} confidence">${
+            CONF_DOT[f.confidence] || "○○○"
+          }</span>
+          <button class="link path" data-viewfile="${esc_(f.path)}">${esc_(f.path)}</button>
+          ${f.shared ? '<span class="badge warn">shared include</span>' : ""}
+          <div class="why">${esc_(f.reason)}</div>
+        </li>`
+        )
+        .join("")
+    : '<li class="cand empty">No candidate file could be verified.</li>';
+
+  const escalHtml = (brief.escalations || []).length
+    ? `<div class="escal"><strong>Needs a human because:</strong><ul>${brief.escalations
+        .map((e) => `<li>${esc_(e)}</li>`)
+        .join("")}</ul></div>`
+    : "";
+
+  const rejectedHtml = (brief.rejectedPaths || []).length
+    ? `<div class="rejected"><strong>⚠ Dropped ${
+        brief.rejectedPaths.length
+      } unverifiable path(s):</strong> <code>${brief.rejectedPaths
+        .map((p) => esc_(p))
+        .join("</code>, <code>")}</code></div>`
+    : "";
+
+  const missingHtml = (brief.missingInfo || []).length
+    ? `<div class="missing"><strong>Case doesn't say:</strong><ul>${brief.missingInfo
+        .map((m) => `<li>${esc_(m)}</li>`)
+        .join("")}</ul></div>`
+    : "";
+
+  const guessHtml = (guesses || []).length
+    ? `<div class="guesses">${guesses
+        .map(
+          (g) =>
+            `<span class="chip-static" title="${esc_(g.why.join(" · "))}">${esc_(
+              g.code
+            )} <em>${g.score}</em></span>`
+        )
+        .join("")}</div>`
+    : "";
+
+  return `
+    <article class="card brief ${brief.needsHuman ? "needs-human" : "confident"}">
+      <header class="brief-head">
+        <h3>${esc_(caseNumber)}</h3>
+        <span class="badge ${brief.needsHuman ? "warn" : "ok"}">${
+          brief.needsHuman ? "needs review" : "confident"
+        }</span>
+        <span class="badge muted">${esc_(brief.reportType)}</span>
+      </header>
+      <p class="problem">${esc_(brief.problemStatement)}</p>
+      ${brief.expectedSymptom ? `<p class="symptom"><strong>Symptom:</strong> ${esc_(brief.expectedSymptom)}</p>` : ""}
+      ${guessHtml}
+      <h4>Candidate files</h4>
+      <ul class="cands">${filesHtml}</ul>
+      ${escalHtml}
+      ${rejectedHtml}
+      ${missingHtml}
+    </article>`;
+}
+
+async function viewRepoFile(path) {
+  const res = await fetch("/api/repo-file?path=" + encodeURIComponent(path));
+  const box = document.createElement("div");
+  box.className = "lightbox filebox";
+  if (!res.ok) {
+    box.innerHTML = `<div class="lb-inner"><p class="err">Could not read ${esc(path)}</p></div>`;
+  } else {
+    const text = await res.text();
+    box.innerHTML = `<div class="lb-inner filebody">
+        <div class="filehead"><code>${esc(path)}</code><button class="link lb-close">close ✕</button></div>
+        <pre class="filesrc">${esc(text)}</pre>
+      </div>`;
+  }
+  box.addEventListener("click", (e) => {
+    if (e.target === box || e.target.closest(".lb-close")) box.remove();
+  });
+  document.body.appendChild(box);
+}
+
+document.addEventListener("click", (e) => {
+  const v = e.target.closest("[data-viewfile]");
+  if (v) { e.preventDefault(); viewRepoFile(v.dataset.viewfile); }
+});
+
+async function runTriage() {
+  if (pipe.running) return;
+  const status = $("#pipeStatus");
+  const results = $("#pipeResults");
+  const body = {
+    mode: pipe.mode,
+    maxCases: Math.max(1, Math.min(+$("#pipeMax").value || 5, 25)),
+    statuses: ["In progress"],
+  };
+  if (pipe.mode === "number") {
+    body.numbers = $("#pipeNumbers").value.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+    if (!body.numbers.length) {
+      status.textContent = "Enter at least one case number.";
+      status.className = "status err";
+      return;
+    }
+  }
+
+  pipe.running = true;
+  pipe.briefs = [];
+  pipe.abort = new AbortController();
+  results.innerHTML = "";
+  $("#pipeRunBtn").disabled = true;
+  $("#pipeStopBtn").classList.remove("hidden");
+  status.innerHTML = '<span class="spinner"></span> Checking connection…';
+  status.className = "status";
+  pipeProgress(true);
+  setPipeProgress(0, 1, "starting…");
+
+  try {
+    const res = await fetch("/api/triage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: pipe.abort.signal,
+    });
+
+    if (!res.ok || !res.headers.get("content-type")?.includes("event-stream")) {
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401 && data.error === "auth") showAuthBanner(data.message);
+      throw new Error(data.message || `Request failed (${res.status})`);
+    }
+
+    let total = 0;
+    await consumeSse(res.body, {
+      found: (d) => {
+        total = d.total;
+        status.innerHTML = `<span class="spinner"></span> ${d.total} case(s) — reading detail…`;
+        if (d.truncated) {
+          results.insertAdjacentHTML(
+            "beforeend",
+            `<p class="hint">More cases matched than the run limit; showing the first ${d.total}.</p>`
+          );
+        }
+      },
+      progress: (d) => {
+        if (d.phase === "detail") setPipeProgress(d.done, d.total, `reading case ${d.done}/${d.total}`);
+        else if (d.phase === "index") setPipeProgress(0, 1, d.message || "indexing…");
+        else if (d.phase === "triage") {
+          setPipeProgress(d.done, d.total, `triaging ${d.done}/${d.total}${d.caseNumber ? " · " + d.caseNumber : ""}`);
+          status.innerHTML = `<span class="spinner"></span> Triaging ${d.done}/${d.total}…`;
+        }
+      },
+      indexed: (d) => {
+        $("#pipeIndexInfo").textContent =
+          `Index: ${d.files.toLocaleString()} files across ${d.districts.toLocaleString()} districts.`;
+      },
+      brief: (d) => {
+        pipe.briefs.push(d);
+        results.insertAdjacentHTML("beforeend", renderBriefCard(d));
+      },
+      caseError: (d) => {
+        results.insertAdjacentHTML(
+          "beforeend",
+          `<article class="card brief needs-human">
+             <header class="brief-head"><h3>${esc(d.caseNumber)}</h3>
+             <span class="badge warn">triage failed</span></header>
+             <p class="problem">${esc(d.message)}</p>
+           </article>`
+        );
+      },
+      error: (d) => {
+        if (d.kind === "auth") showAuthBanner(d.message);
+        status.textContent = d.message;
+        status.className = "status err";
+      },
+      done: (d) => {
+        const needs = pipe.briefs.filter((b) => b.brief.needsHuman).length;
+        status.textContent =
+          `Done — ${d.total} case(s), ${pipe.briefs.length} triaged, ${needs} need review.`;
+        status.className = "status ok";
+        setPipeProgress(total, total, "complete");
+      },
+    });
+  } catch (e) {
+    if (e.name !== "AbortError") {
+      status.textContent = e.message;
+      status.className = "status err";
+    } else {
+      status.textContent = "Stopped.";
+      status.className = "status";
+    }
+  } finally {
+    pipe.running = false;
+    pipe.abort = null;
+    $("#pipeRunBtn").disabled = false;
+    $("#pipeStopBtn").classList.add("hidden");
+    pipeProgress(false);
+  }
+}
+
+$("#pipeRunBtn").addEventListener("click", runTriage);
+$("#pipeStopBtn").addEventListener("click", () => pipe.abort?.abort());
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 async function boot() {

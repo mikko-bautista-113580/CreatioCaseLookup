@@ -21,6 +21,7 @@
       </div>
       <nav class="tabs">
         <button class="tab active" data-tab="lookup">Lookup</button>
+        <button class="tab" data-tab="pipeline">Pipeline</button>
         <button class="tab" data-tab="settings">Settings</button>
       </nav>
     </header>
@@ -80,6 +81,54 @@
       </section>
 
       <section id="results" class="results"></section>
+    </main>
+
+    <!-- ============================ PIPELINE ============================ -->
+    <main id="tab-pipeline" class="tab-panel">
+      <section class="card search">
+        <h2>Case → file triage</h2>
+        <p class="hint">
+          Pulls cases from Creatio, reads each description, and proposes which
+          ColdFusion files under <code>custom-reports</code> the case is about.
+          <strong>Read-only</strong> — nothing is edited, committed, or pushed.
+        </p>
+
+        <div class="field">
+          <label>1 · Which cases</label>
+          <div class="segmented" id="pipeModeSeg">
+            <button data-mode="recent" class="active">All in progress</button>
+            <button data-mode="number">Case number</button>
+          </div>
+        </div>
+
+        <div class="field hidden" id="pipeNumberField">
+          <label for="pipeNumbers">Case number(s)</label>
+          <input id="pipeNumbers" type="text" placeholder="e.g. SR00026236" autocomplete="off" />
+          <p class="hint">Space- or comma-separated.</p>
+        </div>
+
+        <div class="field">
+          <label for="pipeMax">2 · Max cases this run</label>
+          <input id="pipeMax" type="number" min="1" max="25" value="5" />
+          <p class="hint">
+            Each case is triaged by its own agent run, one at a time — budget
+            roughly a minute apiece.
+          </p>
+        </div>
+
+        <div class="actions">
+          <button id="pipeRunBtn" class="primary">Run triage</button>
+          <button id="pipeStopBtn" class="secondary hidden">Stop</button>
+          <span id="pipeStatus" class="status"></span>
+        </div>
+        <div id="pipeProgress" class="progress hidden">
+          <div class="progress-track"><div class="progress-fill" id="pipeFill"></div></div>
+          <span class="progress-label" id="pipeLabel"></span>
+        </div>
+        <p class="hint" id="pipeIndexInfo"></p>
+      </section>
+
+      <section id="pipeResults" class="results"></section>
     </main>
 
     <!-- ============================ SETTINGS ============================ -->

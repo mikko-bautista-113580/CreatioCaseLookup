@@ -332,3 +332,127 @@ td.row-actions { white-space: nowrap; display: flex; gap: 0.3rem; align-items: c
   .two-col { grid-template-columns: 1fr; }
   .ai-ask { flex-direction: column; }
 }
+
+/* ---------------------------------------------------------------------------
+   Pipeline tab — triage briefs
+   --------------------------------------------------------------------------- */
+.brief {
+  margin-bottom: 14px;
+  border-left: 4px solid var(--ok);
+}
+.brief.needs-human { border-left-color: var(--warn); }
+
+.brief-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.brief-head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.badge.ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.badge.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.badge.muted { color: var(--muted); }
+
+.brief .problem { margin: 6px 0; line-height: 1.5; }
+.brief .symptom { margin: 4px 0 10px; color: var(--muted); font-size: 0.9rem; }
+.brief h4 {
+  margin: 12px 0 6px;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.guesses { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.chip-static {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.chip-static em { color: var(--muted); font-style: normal; }
+
+.cands { list-style: none; margin: 0; padding: 0; }
+.cand {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  background: var(--bg);
+}
+.cand.shared { border-color: var(--warn); }
+.cand.empty { color: var(--muted); font-style: italic; }
+.cand .conf {
+  font-size: 0.7rem;
+  letter-spacing: -1px;
+  margin-right: 6px;
+  font-family: monospace;
+}
+.cand .conf-high { color: var(--ok); }
+.cand .conf-medium { color: var(--warn); }
+.cand .conf-low { color: var(--muted); }
+.cand .path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.84rem;
+  word-break: break-all;
+  text-align: left;
+}
+.cand .why { color: var(--muted); font-size: 0.83rem; margin-top: 3px; }
+
+.escal, .rejected, .missing {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+.escal { background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.rejected { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.missing { background: var(--accent); }
+.escal ul, .missing ul { margin: 4px 0 0; padding-left: 18px; }
+.rejected code { word-break: break-all; font-size: 0.8rem; }
+
+/* File viewer */
+.filebox .lb-inner.filebody {
+  background: var(--card);
+  border-radius: var(--radius);
+  max-width: min(1100px, 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.filehead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.filehead code { font-size: 0.85rem; word-break: break-all; }
+.filesrc {
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre;
+  tab-size: 2;
+}

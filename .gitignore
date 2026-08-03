@@ -3,3 +3,11 @@ dist/
 .env
 *.log
 .claude/settings.local.json
+
+# Pipeline working directories — never commit these.
+# .worktrees holds per-case git worktrees of the custom-reports repos;
+# committing one would nest a repo inside this one.
+.cache/
+.audit/
+.state/
+.worktrees/
