@@ -21,7 +21,7 @@ import { randomUUID } from "node:crypto";
 
 const AUDIT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", ".audit");
 
-export type Stage = "triage" | "investigate" | "fix";
+export type Stage = "triage" | "investigate" | "plan" | "fix";
 
 export type AuditEvent =
   | { t: "run.start"; runId: string; stage: Stage; caseNumber: string }
@@ -39,7 +39,30 @@ export type AuditEvent =
   | { t: "paths.rejected"; runId: string; caseNumber: string; paths: string[]; reason: string }
   | { t: "worktree"; runId: string; action: "create" | "remove"; dir: string; branch: string }
   | { t: "patch"; runId: string; files: string[]; bytes: number }
-  | { t: "human"; runId: string; action: "approve" | "reject" | "discard"; stage: Stage };
+  | {
+      t: "human";
+      runId: string;
+      action: "approve" | "reject" | "discard";
+      stage: Stage;
+      /** Set when the approval was for ONE file of a plan, not the whole plan. */
+      only?: string;
+    }
+  | { t: "attachments"; caseNumber: string; count: number; images: number; notes: string[] }
+  | {
+      // A developer-approved copy of a staged attachment into the repo.
+      t: "place";
+      caseNumber: string;
+      from: string;
+      to: string;
+      bytes: number;
+      replaced: boolean;
+    }
+  // A hand-made fix the developer recorded against a case (no agent run).
+  | { t: "fix.save"; id: string; caseNumber: string; files: string[]; bytes: number }
+  | { t: "fix.delete"; id: string; caseNumber: string }
+  // Free-text guidance the developer typed for a run. Trusted input, so it is
+  // recorded verbatim: it changes what the agent did and belongs in the trail.
+  | { t: "hint"; runId: string; caseNumber: string; stage: Stage; text: string };
 
 let ensured = false;
 

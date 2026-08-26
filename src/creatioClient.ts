@@ -239,6 +239,39 @@ export async function login(): Promise<void> {
   if (!bpmcsrf) throw new Error("Creatio login succeeded but no BPMCSRF cookie was returned.");
 }
 
+/**
+ * Flatten Creatio's nested OData error envelope into one readable line.
+ *
+ * The raw body is
+ *   {"error":{"message":"An error has occurred.","innererror":{"message":"...",
+ *    "internalexception":{"message":"<the actual cause>"}}}}
+ * — the generic outer text is useless, and the real reason sits at the bottom.
+ * Walk to the innermost non-empty message; fall back to the raw text if the
+ * body isn't the shape we expect (HTML error page, empty 500, etc.).
+ */
+function odataErrorMessage(text: string): string {
+  let msg = "";
+  try {
+    let node = JSON.parse(text)?.error;
+    while (node && typeof node === "object") {
+      if (typeof node.message === "string" && node.message.trim()) msg = node.message.trim();
+      node = node.innererror ?? node.internalexception;
+    }
+  } catch {
+    // Not JSON — fall through to the raw body.
+  }
+  if (!msg) return text.slice(0, 500) || "(empty response body)";
+
+  // The all-columns serialization failure (Creatio's published EDM model listing
+  // a column the runtime record doesn't have) is the one 500 we hit repeatedly,
+  // and the fix is always the same — say so instead of making the next person
+  // rediscover it. See districtIndex.ts CASE_EXPAND for the $expand variant.
+  if (/failed to serialize the response body|missing the property/i.test(msg)) {
+    msg += " — this Creatio entity cannot be read with all columns; pass an explicit $select.";
+  }
+  return msg;
+}
+
 /** The ONLY network call path. Method is hard-coded to GET. */
 export async function odataGet(path: string): Promise<any> {
   if (!bpmcsrf) await login();
@@ -269,7 +302,8 @@ export async function odataGet(path: string): Promise<any> {
     );
   }
   if (!res.ok) {
-    throw new Error(`OData GET /${path} -> ${res.status} ${res.statusText}: ${text.slice(0, 500)}`);
+    // No res.statusText: undici leaves it empty on HTTP/2 (no reason phrase).
+    throw new Error(`OData GET /${path} -> ${res.status}: ${odataErrorMessage(text)}`);
   }
   return text ? JSON.parse(text) : {};
 }
@@ -344,12 +378,80 @@ export async function queryRecords(
   return (data && data.value) || [];
 }
 
+// ---------------------------------------------------------------------------
+// Bulk paging (app-authored queries only)
+// ---------------------------------------------------------------------------
+// MAX_TOP exists to stop a *model-driven* query from dragging back the whole
+// table, and buildQuery() enforces it for every MCP/UI-facing path. Bulk
+// indexing has the opposite need: it is app-authored, the page size is a
+// constant in our own source, and 50-row pages would turn a 185-request build
+// into a 3,700-request one. So it gets its own builder with a higher ceiling
+// rather than loosening the guardrail everyone else goes through.
+//
+// This is still GET-only via odataGet(), so the read-only-by-construction
+// property of the module is unchanged.
+
+/** Page size ceiling for app-authored bulk reads. Verified server-side: $top=1000
+ *  returns 1000 rows in ~1.4s. */
+export const MAX_PAGE_TOP = 1000;
+
+export interface PageOptions {
+  select?: string[];
+  filter?: string;
+  orderby?: string;
+  top?: number;
+  skip?: number;
+  expand?: string;
+  /** Ask Creatio for the total matching row count (`@odata.count` on the response). */
+  count?: boolean;
+}
+
+/** buildQuery's bulk sibling: honours $skip/$count and clamps to MAX_PAGE_TOP. */
+export function buildPageQuery(opts: PageOptions): string {
+  const p = new URLSearchParams();
+  if (opts.select?.length) p.set("$select", opts.select.join(","));
+  if (opts.filter) p.set("$filter", opts.filter);
+  if (opts.orderby) p.set("$orderby", opts.orderby);
+  if (opts.expand) p.set("$expand", opts.expand);
+  if (opts.skip && opts.skip > 0) p.set("$skip", String(Math.floor(opts.skip)));
+  if (opts.count) p.set("$count", "true");
+  p.set(
+    "$top",
+    String(clampInt(String(opts.top ?? MAX_PAGE_TOP), MAX_PAGE_TOP, 1, MAX_PAGE_TOP))
+  );
+  const s = p.toString();
+  return s ? `?${s}` : "";
+}
+
+/** One bulk page. Returns the rows plus the server total when `count` was set. */
+export async function pageRecords(
+  entity: string,
+  opts: PageOptions = {}
+): Promise<{ rows: any[]; total?: number }> {
+  assertEntityAllowed(entity);
+  const data = await odataGet(entity + buildPageQuery(opts));
+  const total = data && typeof data["@odata.count"] === "number" ? data["@odata.count"] : undefined;
+  return { rows: (data && data.value) || [], total };
+}
+
+/** Row count only, via `$count=true&$top=1`. Creatio's `/$count` endpoint returns
+ *  non-JSON, so it is not usable through odataGet(). */
+export async function countRecords(entity: string, filter?: string): Promise<number> {
+  const { total } = await pageRecords(entity, { select: ["Id"], filter, top: 1, count: true });
+  return total ?? 0;
+}
+
 /** Lightweight auth/connectivity check — reads 1 row of the first allowed
  *  entity (or Contact). Returns {ok:true} or {ok:false, error}. */
 export async function testConnection(): Promise<{ ok: boolean; error?: string }> {
   const entity = ALLOWED_ENTITIES[0] || "Contact";
   try {
-    await odataGet(entity + buildQuery({ top: 1 }));
+    // $select=Id, never an all-columns read: Creatio 500s serializing entities
+    // whose published EDM model advertises a column the runtime record doesn't
+    // have (Case/NltAdditionalInformation, and Contact likewise on this tenant),
+    // and an all-columns Account read is slow enough to time out. Id exists on
+    // every entity, so this probes auth and nothing else.
+    await odataGet(entity + buildQuery({ select: ["Id"], top: 1 }));
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };

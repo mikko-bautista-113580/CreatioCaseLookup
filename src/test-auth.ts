@@ -12,6 +12,25 @@
  * Exit code 0 = works, 1 = doesn't (or config is missing).
  */
 
+/**
+ * Flatten Creatio's nested OData error envelope to its innermost message.
+ * Deliberately duplicated from creatioClient.ts (rather than imported) to keep
+ * this check standalone — importing the client would boot its config layer.
+ */
+function odataErrorMessage(text: string): string {
+  let msg = "";
+  try {
+    let node = JSON.parse(text)?.error;
+    while (node && typeof node === "object") {
+      if (typeof node.message === "string" && node.message.trim()) msg = node.message.trim();
+      node = node.innererror ?? node.internalexception;
+    }
+  } catch {
+    // Not JSON — fall through to the raw body.
+  }
+  return msg || text.slice(0, 300) || "(empty response body)";
+}
+
 function requireEnv(name: string): string {
   const v = process.env[name];
   if (!v) {
@@ -40,7 +59,8 @@ async function testCookies() {
 
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}/0/odata/${entity}?$top=1`, {
+    // $select=Id, not an all-columns read — see testConnection() in creatioClient.ts.
+    res = await fetch(`${BASE_URL}/0/odata/${entity}?$select=Id&$top=1`, {
       method: "GET",
       headers: { Accept: "application/json", Cookie: cookie, BPMCSRF, ForceUseSession: "true" },
     });
@@ -62,7 +82,7 @@ async function testCookies() {
     console.error(`  DevTools → Application → Cookies, and update .env.`);
   } else {
     const text = await res.text().catch(() => "");
-    console.error(`✖ Unexpected HTTP ${res.status} ${res.statusText}: ${text.slice(0, 300)}`);
+    console.error(`✖ Unexpected HTTP ${res.status}: ${odataErrorMessage(text)}`);
   }
   process.exitCode = 1; return;
 }

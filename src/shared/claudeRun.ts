@@ -22,36 +22,73 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 // ---------------------------------------------------------------------------
 // Locate the claude binary once.
+//
+// On Windows `where claude` finds the npm .cmd shim, and batch shims re-parse
+// their arguments: any arg containing a double quote (e.g. an instruction that
+// describes a JSON schema) gets mangled in transit, silently swallowing the
+// flags that follow it. So we look through the shim to the real
+// bin/claude.exe and spawn THAT with shell:false — argv goes across as an
+// array and no quoting layer ever runs. The shell path survives only as a
+// last-resort fallback for unrecognized install layouts.
 // ---------------------------------------------------------------------------
-let CLAUDE_BIN: string | null | undefined;
+interface ClaudeLauncher {
+  cmd: string;
+  preArgs: string[];
+  /** True only for the .cmd-via-cmd.exe fallback (args must be quote-free). */
+  viaShell: boolean;
+}
 
-function resolveClaudeBin(): string | null {
-  if (CLAUDE_BIN !== undefined) return CLAUDE_BIN;
+let LAUNCHER: ClaudeLauncher | null | undefined;
+
+function resolveClaudeLauncher(): ClaudeLauncher | null {
+  if (LAUNCHER !== undefined) return LAUNCHER;
   const isWin = process.platform === "win32";
   const finder = isWin ? "where" : "which";
+  let lines: string[] = [];
   try {
     const r = spawnSync(finder, ["claude"], { encoding: "utf8" });
-    const line = (r.stdout || "")
+    lines = (r.stdout || "")
       .split(/\r?\n/)
       .map((s) => s.trim())
       .filter(Boolean);
-    // On Windows prefer the .cmd shim (spawnable with shell:false).
-    const pick = isWin ? line.find((l) => /\.cmd$/i.test(l)) || line[0] : line[0];
-    CLAUDE_BIN = pick || null;
   } catch {
-    CLAUDE_BIN = null;
+    /* fall through to null */
   }
-  return CLAUDE_BIN;
+
+  if (!lines.length) {
+    LAUNCHER = null;
+  } else if (!isWin) {
+    LAUNCHER = { cmd: lines[0], preArgs: [], viaShell: false };
+  } else {
+    const exeOnPath = lines.find((l) => /\.exe$/i.test(l));
+    const cmdShim = lines.find((l) => /\.cmd$/i.test(l));
+    const pkgDir = cmdShim
+      ? join(dirname(cmdShim), "node_modules", "@anthropic-ai", "claude-code")
+      : null;
+    const shimExe = pkgDir ? join(pkgDir, "bin", "claude.exe") : null;
+    const shimCli = pkgDir ? join(pkgDir, "cli.js") : null;
+
+    if (exeOnPath) {
+      LAUNCHER = { cmd: exeOnPath, preArgs: [], viaShell: false };
+    } else if (shimExe && existsSync(shimExe)) {
+      LAUNCHER = { cmd: shimExe, preArgs: [], viaShell: false };
+    } else if (shimCli && existsSync(shimCli)) {
+      LAUNCHER = { cmd: process.execPath, preArgs: [shimCli], viaShell: false };
+    } else {
+      LAUNCHER = { cmd: cmdShim || lines[0], preArgs: [], viaShell: true };
+    }
+  }
+  return LAUNCHER;
 }
 
 export function claudeAvailable(): boolean {
-  return Boolean(resolveClaudeBin());
+  return Boolean(resolveClaudeLauncher());
 }
 
 /** Quote one command-line token for the Windows shell. Wraps in double quotes
@@ -128,8 +165,8 @@ function toolTarget(input: unknown): string | undefined {
  * outcomes are delivered through onDone / onError.
  */
 export function runClaude(spec: ClaudeRunSpec, cb: ClaudeRunCallbacks): { kill: () => void } {
-  const bin = resolveClaudeBin();
-  if (!bin) {
+  const launcher = resolveClaudeLauncher();
+  if (!launcher) {
     cb.onError(
       new ClaudeCliError(
         "The Claude CLI was not found. Install it (npm i -g @anthropic-ai/claude-code) and run `claude` once to log in.",
@@ -139,13 +176,15 @@ export function runClaude(spec: ClaudeRunSpec, cb: ClaudeRunCallbacks): { kill: 
     return { kill: () => {} };
   }
 
+  const outputFormat = spec.outputFormat || "stream-json";
   const args = [
     "-p",
     spec.instruction,
     "--output-format",
-    spec.outputFormat || "stream-json",
+    outputFormat,
     "--verbose",
-    "--include-partial-messages",
+    // Partial text deltas exist only in stream-json mode; the flag errors otherwise.
+    ...(outputFormat === "stream-json" ? ["--include-partial-messages"] : []),
     "--strict-mcp-config", // no --mcp-config => all MCP servers disabled
     "--permission-mode",
     spec.permissionMode || "dontAsk", // never blocks on an interactive prompt
@@ -170,21 +209,21 @@ export function runClaude(spec: ClaudeRunSpec, cb: ClaudeRunCallbacks): { kill: 
     cwd = spec.cwd.dir;
   }
 
-  // Windows refuses to spawn a .cmd shim with shell:false (EINVAL), so on Windows
-  // we go through the shell. This stays injection-safe because EVERY arg here is
-  // app-authored (flags + fixed instruction/system prompt) and individually
-  // quoted; all untrusted content is on stdin, never on the command line. On
-  // other platforms we spawn directly (no shell).
-  const isWin = process.platform === "win32";
-  const child = isWin
-    ? spawn([bin, ...args].map(winQuote).join(" "), {
+  // Prefer shell:false everywhere — argv crosses as an array, no quoting layer,
+  // so instructions containing quotes survive intact. The shell path is only
+  // the last-resort .cmd fallback (see resolveClaudeLauncher); it stays
+  // injection-safe because EVERY arg here is app-authored and individually
+  // quoted, and all untrusted content is on stdin, never on the command line.
+  const argv = [...launcher.preArgs, ...args];
+  const child = launcher.viaShell
+    ? spawn([launcher.cmd, ...argv].map(winQuote).join(" "), {
         cwd,
         shell: true,
         windowsHide: true,
         stdio: ["pipe", "pipe", "pipe"],
         signal: spec.signal,
       })
-    : spawn(bin, args, {
+    : spawn(launcher.cmd, argv, {
         cwd,
         shell: false,
         windowsHide: true,
@@ -194,6 +233,7 @@ export function runClaude(spec: ClaudeRunSpec, cb: ClaudeRunCallbacks): { kill: 
 
   let stderr = "";
   let buffer = "";
+  let rawAll = ""; // full stdout — needed for --output-format json (see close)
   let finished = false;
   const meta: RunMeta = {};
   let streamedAny = false; // did we get any streamed text deltas?
@@ -223,6 +263,10 @@ export function runClaude(spec: ClaudeRunSpec, cb: ClaudeRunCallbacks): { kill: 
     } catch {
       return; // ignore non-JSON noise
     }
+    handleObj(obj);
+  }
+
+  function handleObj(obj: any): void {
     if (obj.type === "stream_event") {
       const ev = obj.event;
       if (ev?.type === "content_block_delta" && ev.delta?.type === "text_delta") {
@@ -259,6 +303,7 @@ export function runClaude(spec: ClaudeRunSpec, cb: ClaudeRunCallbacks): { kill: 
 
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (d: string) => {
+    rawAll += d;
     buffer += d;
     let nl: number;
     while ((nl = buffer.indexOf("\n")) !== -1) {
@@ -288,6 +333,19 @@ export function runClaude(spec: ClaudeRunSpec, cb: ClaudeRunCallbacks): { kill: 
     finished = true;
     clearTimeout(timer);
     if (buffer.trim()) handleLine(buffer);
+
+    // --output-format json emits ONE JSON document (an array of messages, or a
+    // bare result object) rather than line-delimited events — the line parser
+    // above sees an array, finds no .type, and extracts nothing. Re-parse the
+    // whole capture and walk it.
+    if (spec.outputFormat === "json" && !resultText) {
+      try {
+        const doc = JSON.parse(rawAll.trim());
+        for (const item of Array.isArray(doc) ? doc : [doc]) handleObj(item);
+      } catch {
+        /* fall through to the normal error paths */
+      }
+    }
 
     // Some runs deliver the whole answer in the final `result` line rather than
     // as streamed deltas — surface it so the panel isn't blank.

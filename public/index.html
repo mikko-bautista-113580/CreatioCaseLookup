@@ -21,7 +21,9 @@
       </div>
       <nav class="tabs">
         <button class="tab active" data-tab="lookup">Lookup</button>
+        <button class="tab" data-tab="districts">Districts</button>
         <button class="tab" data-tab="pipeline">Pipeline</button>
+        <button class="tab" data-tab="fixes">My fixes</button>
         <button class="tab" data-tab="settings">Settings</button>
       </nav>
     </header>
@@ -83,6 +85,59 @@
       <section id="results" class="results"></section>
     </main>
 
+    <!-- ============================ DISTRICTS ============================ -->
+    <main id="tab-districts" class="tab-panel">
+      <section class="card search">
+        <h2>Cases by SIS district</h2>
+        <p class="hint">
+          Groups cases by <code>Account.NltDistrictCode</code> — the SIS district
+          code, the same code as the <code>custom-reports</code> district folders.
+          Pick a district to read its ticket history.
+        </p>
+
+        <div id="dxIndexBar" class="dx-index-bar">
+          <span id="dxIndexInfo" class="hint">Checking index…</span>
+          <span class="dx-index-actions">
+            <button id="dxBuildBtn" class="primary hidden">Build index</button>
+            <button id="dxMoreBtn" class="secondary hidden">Index more history</button>
+            <button id="dxRefreshBtn" class="secondary hidden">Refresh</button>
+            <button id="dxStopBtn" class="secondary hidden">Stop</button>
+          </span>
+        </div>
+        <div id="dxProgress" class="progress hidden">
+          <div class="progress-track"><div class="progress-fill" id="dxFill"></div></div>
+          <span class="progress-label" id="dxLabel"></span>
+        </div>
+      </section>
+
+      <section id="dxBody" class="dx-layout hidden">
+        <!-- Left: district list -->
+        <aside class="card dx-list-pane">
+          <div class="field">
+            <label for="dxSearch">Find a district</label>
+            <input id="dxSearch" type="text" placeholder="code or school name, e.g. HCA or Heritage" autocomplete="off" />
+            <p class="hint" id="dxListCount"></p>
+          </div>
+          <div id="dxList" class="dx-list"></div>
+        </aside>
+
+        <!-- Right: that district's ticket history -->
+        <div class="card dx-history-pane">
+          <div id="dxHistoryHead" class="dx-hist-head">
+            <div class="empty">Pick a district on the left to see its ticket history.</div>
+          </div>
+          <div id="dxFilters" class="dx-filters hidden">
+            <input id="dxHistQ" type="text" placeholder="search these tickets (subject, number, owner)…" autocomplete="off" />
+            <select id="dxHistStatus">
+              <option value="">All statuses</option>
+              <option value="__open">Open / active only</option>
+            </select>
+          </div>
+          <div id="dxHistory" class="dx-history"></div>
+        </div>
+      </section>
+    </main>
+
     <!-- ============================ PIPELINE ============================ -->
     <main id="tab-pipeline" class="tab-panel">
       <section class="card search">
@@ -131,6 +186,49 @@
       <section id="pipeResults" class="results"></section>
     </main>
 
+    <!-- ============================ MY FIXES ============================ -->
+    <main id="tab-fixes" class="tab-panel">
+      <section class="card search">
+        <h2>Record a fix</h2>
+        <p class="hint">
+          For cases you fix by hand: scans <code>custom-reports</code> for your
+          uncommitted git changes, then saves the files + diffs + a note against
+          the case number. Nothing is committed or modified — this only records
+          what you already changed.
+        </p>
+
+        <div class="actions">
+          <button id="fixScanBtn" class="primary">Scan for changes</button>
+          <span id="fixScanStatus" class="status"></span>
+        </div>
+        <div id="fixScanResults"></div>
+
+        <div class="fix-form">
+          <div class="field">
+            <label for="fixCase">Case number</label>
+            <input id="fixCase" type="text" placeholder="e.g. SR00026236" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="fixNote">What did you change and why?</label>
+            <textarea id="fixNote" rows="3" placeholder="e.g. fixed GPA rounding in the transcript template"></textarea>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="fixSaveBtn" class="primary">Save fix record</button>
+          <span id="fixSaveStatus" class="status"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Saved fixes</h2>
+        <div class="field">
+          <input id="fixSearch" type="text" placeholder="filter by case, note, district, file…" autocomplete="off" />
+        </div>
+        <div id="fixList"></div>
+      </section>
+    </main>
+
     <!-- ============================ SETTINGS ============================ -->
     <main id="tab-settings" class="tab-panel">
       <section class="card">
@@ -149,9 +247,18 @@
         <fieldset class="cookies">
           <legend>Session cookies (SSO)</legend>
           <p class="hint">
-            Get these from your browser after logging in to Creatio:
-            <strong>DevTools (F12) → Application → Cookies</strong> → your Creatio URL.
-            Copy the <em>values</em>. Leave a field blank to keep the current value.
+            Click below to open a browser at the Creatio login page. Once you finish
+            signing in there (including any MFA prompt), the session cookies are
+            captured automatically — no copy/paste needed.
+          </p>
+          <div class="actions">
+            <button id="browserLoginBtn" class="primary">Log in with Creatio…</button>
+            <span id="browserLoginStatus" class="status"></span>
+          </div>
+          <p class="hint">
+            Or paste them by hand from <strong>DevTools (F12) → Application → Cookies</strong>
+            → your Creatio URL. Copy the <em>values</em>. Leave a field blank to keep the
+            current value.
           </p>
           <div class="field">
             <label for="cfgAspx">.ASPXAUTH <span id="stAspx" class="pill"></span></label>
@@ -189,7 +296,8 @@
 
     <footer class="foot">
       Read-only · queries never modify Creatio data ·
-      <span id="footBase"></span>
+      <span id="footBase"></span> ·
+      <button class="link" id="aiInstrLink">AI instructions</button>
     </footer>
 
     <script src="/app.js"></script>

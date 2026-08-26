@@ -150,6 +150,16 @@ table.cases th, table.cases td { text-align: left; padding: 0.55rem 0.6rem; bord
 table.cases th { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer; }
 table.cases tr.case-row:hover { background: var(--accent); }
 table.cases td.num { font-family: monospace; white-space: nowrap; }
+/* District code chip — jumps to that district's history in the Districts tab. */
+.dx-link {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem; font-weight: 700; white-space: nowrap;
+  padding: 0.12rem 0.5rem; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--accent); color: var(--brand);
+  cursor: pointer;
+}
+.dx-link:hover { border-color: var(--brand); filter: brightness(0.97); }
+
 .st-badge { font-size: 0.72rem; font-weight: 700; padding: 0.12rem 0.5rem; border-radius: 999px; white-space: nowrap; }
 .st-New { background: #e6f0ff; color: #1c4fd6; }
 .st-Inprogress { background: #fff2d9; color: #8a5a00; }
@@ -274,12 +284,12 @@ th.chk, td.chk { width: 34px; text-align: center; padding-left: 0.4rem; padding-
 
 /* Per-row analyze + expand actions */
 td.row-actions { white-space: nowrap; display: flex; gap: 0.3rem; align-items: center; }
-.row-ai {
+.row-ai, .row-view {
   border: 1px solid var(--line); background: var(--card); cursor: pointer;
   border-radius: 7px; padding: 0.15rem 0.4rem; font-size: 0.85rem; line-height: 1;
 }
-.row-ai:hover:not(:disabled) { border-color: var(--brand); transform: translateY(-1px); }
-.row-ai:disabled { opacity: 0.5; cursor: not-allowed; }
+.row-ai:hover:not(:disabled), .row-view:hover:not(:disabled) { border-color: var(--brand); transform: translateY(-1px); }
+.row-ai:disabled, .row-view:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Panel tools (Stop / Copy / Download) */
 .ai-tools { display: inline-flex; align-items: center; gap: 0.5rem; }
@@ -333,6 +343,78 @@ td.row-actions { white-space: nowrap; display: flex; gap: 0.3rem; align-items: c
   .ai-ask { flex-direction: column; }
 }
 
+/* ===========================================================================
+   Ticket viewer — full case page in an overlay (like the Creatio case card).
+   Sits BELOW the image lightbox (z-index 90 < 100) so clicking a screenshot
+   inside a ticket still zooms it on top.
+   =========================================================================== */
+body.no-scroll { overflow: hidden; }
+
+.ticket-overlay {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(12, 18, 30, 0.55);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 3vh 1rem;
+}
+.ticket-page {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  width: min(1080px, 100%); max-height: 94vh;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.ticket-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
+  padding: 1rem 1.25rem; border-bottom: 1px solid var(--line);
+}
+.tk-num-line { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.25rem; }
+.tk-num-line .num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
+.ticket-head h2 { margin: 0; font-size: 1.15rem; line-height: 1.35; }
+.tk-close {
+  flex: 0 0 auto; border: 1px solid var(--line); background: var(--card); color: var(--muted);
+  border-radius: 8px; width: 34px; height: 34px; font-size: 1rem; cursor: pointer;
+}
+.tk-close:hover { color: var(--danger); border-color: var(--danger); }
+
+.ticket-body { overflow-y: auto; padding: 1rem 1.25rem 1.5rem; }
+.ticket-grid { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 1.5rem; align-items: start; }
+@media (max-width: 800px) { .ticket-grid { grid-template-columns: 1fr; } }
+
+/* Left profile column — mirrors Creatio's case profile panel. */
+.tk-profile {
+  display: flex; flex-direction: column; gap: 0.55rem;
+  border: 1px solid var(--line); border-radius: 10px; padding: 0.9rem;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  position: sticky; top: 0;
+}
+.tk-field { display: flex; flex-direction: column; gap: 0.1rem; }
+.tk-k { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 700; }
+.tk-v { font-size: 0.88rem; overflow-wrap: anywhere; }
+.tk-v .st-badge { align-self: flex-start; }
+
+.tk-main h4 { margin: 1rem 0 0.4rem; font-size: 0.8rem; text-transform: uppercase; color: var(--muted); letter-spacing: 0.04em; }
+.tk-main h4:first-child { margin-top: 0; }
+
+/* ---------------------------------------------------------------------------
+   AI instructions viewer — verbatim prompts shown for review
+   --------------------------------------------------------------------------- */
+.instr-stage { margin-bottom: 1.75rem; }
+.instr-stage:last-child { margin-bottom: 0; }
+.instr-stage h3 { margin: 0 0 0.15rem; font-size: 1rem; }
+.instr-stage h4 {
+  margin: 0.9rem 0 0.35rem; font-size: 0.75rem;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted);
+}
+.instr-guards { margin: 0; padding-left: 1.2rem; }
+.instr-guards li { margin: 0.2rem 0; font-size: 0.85rem; line-height: 1.45; }
+pre.prompt {
+  margin: 0; padding: 0.75rem 0.9rem;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem; line-height: 1.55;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
 /* ---------------------------------------------------------------------------
    Pipeline tab — triage briefs
    --------------------------------------------------------------------------- */
@@ -367,6 +449,12 @@ td.row-actions { white-space: nowrap; display: flex; gap: 0.3rem; align-items: c
 .badge.ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
 .badge.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
 .badge.muted { color: var(--muted); }
+
+/* Triage labels: what kind of work, and which document. */
+.badge.rtype { background: color-mix(in srgb, var(--brand) 14%, transparent); color: var(--brand); }
+.badge.nature { border: 1px solid var(--line); color: var(--ink); background: var(--bg); }
+.badge.nature.new-template { border-color: var(--brand); color: var(--brand); font-weight: 700; }
+.badge.nature.unknown { color: var(--muted); }
 
 .brief .problem { margin: 6px 0; line-height: 1.5; }
 .brief .symptom { margin: 4px 0 10px; color: var(--muted); font-size: 0.9rem; }
@@ -456,3 +544,405 @@ td.row-actions { white-space: nowrap; display: flex; gap: 0.3rem; align-items: c
   white-space: pre;
   tab-size: 2;
 }
+
+/* ===========================================================================
+   Districts tab — district browser + per-district ticket history
+   =========================================================================== */
+.warn-text { color: var(--warn); font-weight: 600; }
+
+.dx-index-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 4px;
+}
+.dx-index-bar .hint { margin: 0; flex: 1 1 320px; }
+.dx-index-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Two panes: district list on the left, that district's history on the right. */
+.dx-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .dx-layout { grid-template-columns: 1fr; }
+  .dx-list { max-height: 320px; }
+}
+
+.dx-list-pane { position: sticky; top: 12px; }
+.dx-list {
+  max-height: 62vh;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  margin-top: 6px;
+}
+.dx-item {
+  display: flex;
+  width: 100%;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.dx-item:last-child { border-bottom: 0; }
+.dx-item:hover { background: var(--accent); }
+.dx-item.active { background: var(--accent); box-shadow: inset 3px 0 0 var(--brand); }
+.dx-item.quiet .dx-code, .dx-item.quiet .dx-total { color: var(--muted); font-weight: 500; }
+.dx-item.bucket { background: color-mix(in srgb, var(--warn) 8%, transparent); }
+.dx-item.bucket .dx-code { color: var(--warn); }
+
+.dx-item-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dx-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+.dx-acct {
+  font-size: 0.76rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 210px;
+}
+.dx-item-counts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.dx-total { font-weight: 700; font-size: 0.85rem; }
+.dx-open {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--brand);
+  background: var(--accent);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+.dx-last { font-size: 0.68rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.dx-hist-head { border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 8px; }
+.dx-hist-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.dx-hist-title h3 {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.05rem;
+}
+.dx-hist-actions { display: flex; align-items: center; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
+.dx-accounts { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0 0; }
+
+/* "View full details" — every ticket's description + timeline on one page,
+   so the browser's own Ctrl+F can search across a whole district. */
+.dx-full { display: flex; flex-direction: column; gap: 14px; }
+.dx-full-case { border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; background: var(--card); }
+.dx-full-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 6px;
+  margin-bottom: 4px;
+}
+.dx-full-head .num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; white-space: nowrap; }
+.dx-full-head .subj { flex: 1 1 260px; }
+.dx-full-body .detail-pending { padding: 0.5rem 0.25rem; color: var(--muted); font-size: 0.85rem; }
+
+.dx-filters { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.dx-filters input { flex: 1 1 240px; }
+.dx-filters select { flex: 0 0 auto; }
+
+.dx-history { min-height: 80px; }
+.dx-table .num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
+
+/* An inferred code must never read as the authoritative account field. */
+.badge.inferred {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem;
+}
+
+/* ===========================================================================
+   Work on a case — approval gate, live tool log, uncommitted-diff review
+   =========================================================================== */
+.work-gate { margin: 12px 0; }
+
+/* Attachments strip — what the client sent, with cropped variants + placer. */
+.work-atts { margin: 12px 0; }
+.work-atts h4 { margin: 0 0 6px; font-size: 0.85rem; }
+.att-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 10px;
+  margin: 6px 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+  font-size: 0.85rem;
+}
+.att-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: repeating-conic-gradient(var(--line) 0 25%, transparent 0 50%) 0 0 / 12px 12px;
+}
+.att-name { font-weight: 600; word-break: break-all; }
+.att-logo-flag {
+  background: var(--warn);
+  color: #fff;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.att-place { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.att-place select,
+.att-place input {
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 0.8rem;
+}
+.att-place input { width: 180px; }
+.att-place button {
+  padding: 0.3rem 0.8rem;
+  border: 1px solid var(--brand);
+  border-radius: 7px;
+  background: var(--brand);
+  color: var(--brand-ink);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.att-status { font-size: 0.78rem; }
+.att-status.ok { color: var(--ok); font-weight: 600; }
+
+.work-scope {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 10px 0;
+}
+@media (max-width: 720px) { .work-scope { grid-template-columns: 1fr; } }
+.work-scope h4 { margin: 0 0 6px; font-size: 0.85rem; }
+.work-scope ul { margin: 0; padding-left: 18px; }
+.work-scope li { font-size: 0.85rem; line-height: 1.6; word-break: break-all; }
+
+/* Live tool log — one line per Read/Grep/Edit the agent makes. */
+.tool-log {
+  max-height: 180px;
+  overflow-y: auto;
+  margin: 10px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+}
+.tl-line { line-height: 1.7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-name { color: var(--brand); font-weight: 600; }
+.tl-target { color: var(--muted); }
+
+/* Diff review */
+.work-changes { margin-top: 12px; }
+.work-changes h4 { margin: 0 0 4px; }
+.chg { margin: 8px 0; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.chg summary {
+  cursor: pointer;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  font-size: 0.85rem;
+}
+.chg summary code { word-break: break-all; }
+.chg .diff {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  white-space: pre;
+}
+.d-add { color: var(--ok); }
+.d-del { color: var(--danger); }
+.d-hunk { color: var(--brand); }
+.d-meta { color: var(--muted); }
+
+/* ---------------------------------------------------------------------------
+   The plan — what Claude intends to change, shown before the approve button.
+   Styled like the gate it sits above: quiet card, one row per step, with the
+   action and the target file readable at a glance.
+   --------------------------------------------------------------------------- */
+.work-plan {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--brand);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.plan-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.plan-head h4 { margin: 0; font-size: 0.9rem; }
+.plan-head .hint { margin: 0; }
+.plan-log { max-height: 120px; margin: 8px 0 0; }
+.plan-elapsed { font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums; margin-left: auto; }
+.plan-goal { margin: 8px 0 0; font-size: 0.92rem; font-weight: 600; }
+
+/* Group labels for the two halves of the plan — same weight so the ordering
+   (changes, then reads) is what carries the ranking. */
+.plan-group {
+  margin: 10px 0 0;
+  font-size: 0.78rem; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.03em;
+}
+.plan-group + .plan-steps { margin-top: 2px; }
+.plan-group-hint { text-transform: none; letter-spacing: 0; font-weight: 400; opacity: 0.85; }
+
+.plan-steps { list-style: none; margin: 10px 0 0; padding: 0; }
+.plan-step { display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+.plan-step:first-child { border-top: none; }
+.plan-n {
+  flex: none; width: 20px; height: 20px; margin-top: 2px;
+  display: grid; place-items: center;
+  border-radius: 50%; background: var(--brand); color: var(--brand-ink);
+  font-size: 0.7rem; font-weight: 700;
+}
+.plan-body { min-width: 0; }
+.plan-file { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.plan-file code { word-break: break-all; }
+.plan-action { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; }
+.pa-edit { color: var(--warn); }
+.pa-create { color: var(--ok); }
+.pa-read { color: var(--muted); }
+.plan-what { margin: 4px 0 0; font-size: 0.85rem; }
+.plan-why { margin: 2px 0 0; font-size: 0.8rem; color: var(--muted); }
+.plan-step-none .plan-what { color: var(--muted); font-style: italic; }
+
+/* Per-file approval. Quiet until hovered — it starts an edit-capable agent, so
+   it should read as deliberate, not as the obvious next click. */
+.plan-run {
+  margin: 6px 0 0;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.plan-run:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); }
+.plan-run:disabled { opacity: 0.45; cursor: default; }
+.plan-ran {
+  display: inline-block; margin: 6px 0 0;
+  font-size: 0.76rem; font-weight: 700; color: var(--ok);
+}
+.plan-new {
+  font-size: 0.7rem; font-weight: 700; padding: 1px 6px; border-radius: 999px;
+  background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok);
+}
+/* Plan paths open the file, so they are buttons — keep them looking like the
+   <code> they replaced. */
+.plan-file .path, .plan-read .path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.84rem;
+  word-break: break-all;
+  text-align: left;
+  padding: 0;
+}
+
+/* Files the plan only reads: same information, ranked below the edits and
+   compressed to one line each — evidence for the plan, not the plan itself. */
+.plan-reads { margin: 10px 0 0; padding-top: 8px; border-top: 1px dashed var(--line); }
+.plan-reads > summary {
+  cursor: pointer;
+  font-size: 0.78rem; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.03em;
+}
+.plan-reads > ul { list-style: none; margin: 6px 0 0; padding: 0; }
+.plan-read {
+  display: flex; align-items: baseline; flex-wrap: wrap;
+  gap: 4px 8px; padding: 3px 0;
+}
+.plan-read .path { font-size: 0.8rem; }
+.plan-read-why { min-width: 0; font-size: 0.8rem; color: var(--muted); }
+
+/* A step aiming outside the approved folders: flagged, never hidden — the
+   permission system would deny it, and a silently dropped step is a lie. */
+.plan-step-bad .plan-file code { text-decoration: line-through; opacity: 0.75; }
+.plan-oos {
+  font-size: 0.7rem; font-weight: 700; padding: 1px 6px; border-radius: 999px;
+  background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger);
+}
+
+.plan-aside { margin: 10px 0 0; }
+.plan-aside h5 { margin: 0 0 2px; font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.plan-aside ul { margin: 0; padding-left: 18px; }
+.plan-aside li { font-size: 0.83rem; line-height: 1.6; }
+.plan-q li { color: var(--warn); }
+.plan-warn li { color: var(--danger); }
+
+/* Instruction box on the work-on panel — trusted developer direction. */
+.work-hint {
+  margin: 10px 0 4px; padding: 10px 12px;
+  border: 1px solid var(--line); border-left: 4px solid var(--brand);
+  border-radius: 9px; background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.work-hint > label { display: block; font-weight: 600; font-size: 0.85rem; margin-bottom: 0.4rem; }
+.work-hint textarea { min-height: 48px; }
+.work-hint .hint { margin-top: 0.35rem; }
+
+/* ---------------------------------------------------------------------------
+   My fixes tab — record hand-made fixes against a case
+   --------------------------------------------------------------------------- */
+.fix-form { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 1rem; margin-top: 1rem; }
+@media (max-width: 640px) { .fix-form { grid-template-columns: 1fr; } }
+
+textarea {
+  width: 100%; padding: 0.6rem 0.7rem; border: 1px solid var(--line);
+  border-radius: 9px; background: var(--bg); color: var(--ink);
+  font-size: 0.95rem; font-family: inherit; resize: vertical;
+}
+textarea:focus { outline: 2px solid var(--brand); outline-offset: 0; border-color: var(--brand); }
+
+.fix-sub-head {
+  margin: 12px 0 2px; font-size: 0.78rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.fix-pick { flex: 0 0 auto; }
+
+.fix-rec-meta { flex-wrap: wrap; }
+.fix-rec-meta .num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
+.fix-excerpt {
+  color: var(--muted); flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fix-del { margin-left: auto; color: var(--danger); font-size: 0.8rem; }
+.fix-rec-body { padding: 10px 12px; }
+.fix-note { margin: 0 0 8px; line-height: 1.5; white-space: pre-wrap; }

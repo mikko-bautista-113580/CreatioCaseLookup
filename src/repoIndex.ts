@@ -54,14 +54,28 @@ const SKIP_DIR = new Set([
   "__MACOSX",
 ]);
 
-/** A district code looks like AA-CA, HCA-CAN, SA-GUAM. Case-insensitive. */
-const DISTRICT_CODE_RE = /^[A-Za-z][A-Za-z0-9]{1,7}(-[A-Za-z0-9]{2,5})+$/;
+/**
+ * The canonical district-code shape: AA-CA, HCA-CAN, SA-GUAM, RWI-JAMAICA.
+ *
+ * This is a *quality* signal, not a gate. Roughly 600 real folders don't match
+ * it — JAMAICA, BrooklynDioc, CCA, CH-Longview — and cases are filed against
+ * them like any other. Gating the index on this shape made those folders
+ * invisible to triage: unofferable as candidates and unreachable as edit scope.
+ * Every top-level folder is indexed now; `strict` just records which ones look
+ * like a real code so name-based scoring can prefer them.
+ */
+const DISTRICT_CODE_RE = /^[A-Za-z][A-Za-z0-9]{1,7}(-[A-Za-z0-9]{2,8})+$/;
+
+/** Build artifacts and scratch folders — never a district, never worth offering. */
+const JUNK_DIR_RE = /^(?:_|tmp-|copy of )|_files$/i;
 
 export interface DistrictEntry {
   subrepo: SubRepo;
   code: string; // as it appears on disk, e.g. "HCA-CAN"
   relDir: string; // "ReportCardAO/HCA-CAN"
   files: string[]; // repo-relative, forward-slash
+  /** True when `code` matches the canonical district-code shape. */
+  strict: boolean;
 }
 
 export interface RepoIndex {
@@ -72,6 +86,13 @@ export interface RepoIndex {
   allFiles: Set<string>;
   /** Canonical (on-disk case) path keyed by lowercased path. */
   canonical: Map<string, string>;
+  /**
+   * Lowercased basename -> canonical paths carrying it. Lets us resolve a
+   * filename a case mentions ("TermReportCardLog.cfm") back to real files
+   * without trusting the model to know where it lives. ~94% of basenames in
+   * this tree are unique, so this resolves cleanly far more often than not.
+   */
+  byBasename: Map<string, string[]>;
   /** ReportCardRoot/* — the shared generic includes. */
   rootFiles: string[];
   counts: Record<string, number>;
@@ -120,8 +141,19 @@ export async function buildIndex(force = false, onProgress?: BuildProgress): Pro
   const districts = new Map<string, DistrictEntry[]>();
   const allFiles = new Set<string>();
   const canonical = new Map<string, string>();
+  const byBasename = new Map<string, string[]>();
   const rootFiles: string[] = [];
   const counts: Record<string, number> = {};
+
+  const addFile = (rel: string): void => {
+    const lower = rel.toLowerCase();
+    allFiles.add(lower);
+    canonical.set(lower, rel);
+    const base = lower.slice(lower.lastIndexOf("/") + 1);
+    const bucket = byBasename.get(base);
+    if (bucket) bucket.push(rel);
+    else byBasename.set(base, [rel]);
+  };
 
   for (const sub of SUBREPOS) {
     const subAbs = join(REPO_ROOT, sub);
@@ -141,8 +173,7 @@ export async function buildIndex(force = false, onProgress?: BuildProgress): Pro
         const ext = dot === -1 ? "" : e.name.slice(dot).toLowerCase();
         if (!CODE_EXT.has(ext)) continue;
         const rel = `${sub}/${e.name}`;
-        allFiles.add(rel.toLowerCase());
-        canonical.set(rel.toLowerCase(), rel);
+        addFile(rel);
         if (sub === "ReportCardRoot") rootFiles.push(rel);
         n++;
         continue;
@@ -151,20 +182,18 @@ export async function buildIndex(force = false, onProgress?: BuildProgress): Pro
 
       const files: string[] = [];
       await walk(join(subAbs, e.name), `${sub}/${e.name}`, files);
-      for (const f of files) {
-        allFiles.add(f.toLowerCase());
-        canonical.set(f.toLowerCase(), f);
-      }
+      for (const f of files) addFile(f);
       n += files.length;
 
-      // Only treat it as a district if the folder name looks like a code.
-      if (DISTRICT_CODE_RE.test(e.name)) {
+      // Every folder that holds code is addressable, code-shaped name or not.
+      if (files.length && !JUNK_DIR_RE.test(e.name)) {
         const key = e.name.toUpperCase();
         const entry: DistrictEntry = {
           subrepo: sub,
           code: e.name,
           relDir: `${sub}/${e.name}`,
           files,
+          strict: DISTRICT_CODE_RE.test(e.name),
         };
         const list = districts.get(key);
         if (list) list.push(entry);
@@ -179,6 +208,7 @@ export async function buildIndex(force = false, onProgress?: BuildProgress): Pro
     districts,
     allFiles,
     canonical,
+    byBasename,
     rootFiles,
     counts,
   };
@@ -235,6 +265,20 @@ export function subrepoOf(relPath: string): SubRepo | null {
   return (SUBREPOS as readonly string[]).includes(head) ? (head as SubRepo) : null;
 }
 
+/**
+ * The district folder a repo-relative file lives in, or null for a file that
+ * sits directly in a subrepo root (ReportCardRoot includes, mostly).
+ */
+export function districtForPath(ix: RepoIndex, relPath: string): DistrictEntry | null {
+  const parts = normalizeRel(relPath).split("/");
+  if (parts.length < 3) return null;
+  const relDir = `${parts[0]}/${parts[1]}`;
+  for (const e of ix.districts.get(parts[1].toUpperCase()) || []) {
+    if (e.relDir.toLowerCase() === relDir.toLowerCase()) return e;
+  }
+  return null;
+}
+
 /** Districts whose code contains `needle` (case-insensitive). */
 export function districtsMatching(ix: RepoIndex, needle: string): DistrictEntry[] {
   const n = needle.trim().toUpperCase();
@@ -249,7 +293,11 @@ export function districtsMatching(ix: RepoIndex, needle: string): DistrictEntry[
 // ---------------------------------------------------------------------------
 // Disk cache
 // ---------------------------------------------------------------------------
+/** Bump when the index shape or the folder-selection rules change. */
+const CACHE_VERSION = 2;
+
 interface CacheShape {
+  version: number;
   builtAt: number;
   districts: Array<[string, DistrictEntry[]]>;
   rootFiles: string[];
@@ -260,6 +308,7 @@ interface CacheShape {
 async function saveCache(ix: RepoIndex): Promise<void> {
   await mkdir(CACHE_DIR, { recursive: true });
   const shape: CacheShape = {
+    version: CACHE_VERSION,
     builtAt: ix.builtAt,
     districts: [...ix.districts.entries()],
     rootFiles: ix.rootFiles,
@@ -273,18 +322,26 @@ async function loadCache(): Promise<RepoIndex | null> {
   try {
     const raw = await readFile(CACHE_FILE, "utf8");
     const shape = JSON.parse(raw) as CacheShape;
+    if (shape?.version !== CACHE_VERSION) return null; // stale layout — rebuild
     if (!shape?.builtAt || Date.now() - shape.builtAt > TTL_MS) return null;
     const allFiles = new Set<string>();
     const canonical = new Map<string, string>();
+    const byBasename = new Map<string, string[]>();
     for (const f of shape.files) {
-      allFiles.add(f.toLowerCase());
-      canonical.set(f.toLowerCase(), f);
+      const lower = f.toLowerCase();
+      allFiles.add(lower);
+      canonical.set(lower, f);
+      const base = lower.slice(lower.lastIndexOf("/") + 1);
+      const bucket = byBasename.get(base);
+      if (bucket) bucket.push(f);
+      else byBasename.set(base, [f]);
     }
     return {
       builtAt: shape.builtAt,
       districts: new Map(shape.districts),
       allFiles,
       canonical,
+      byBasename,
       rootFiles: shape.rootFiles,
       counts: shape.counts,
     };

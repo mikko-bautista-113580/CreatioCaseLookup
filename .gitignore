@@ -7,7 +7,13 @@ dist/
 # Pipeline working directories — never commit these.
 # .worktrees holds per-case git worktrees of the custom-reports repos;
 # committing one would nest a repo inside this one.
+# .attachments holds downloaded case attachments (client files) per case.
 .cache/
 .audit/
 .state/
 .worktrees/
+.attachments/
+
+# Persistent Chrome profile used for the Settings "Log in with Creatio" popup —
+# holds real session cookies, never commit it.
+.browser-profile/

@@ -109,6 +109,8 @@ export interface CaseRow {
   Owner: string;
   Account: string;
   Contact: string;
+  /** SIS district code off the account (Account.NltDistrictCode), "" if none. */
+  District: string;
 }
 
 export interface FindResult {
@@ -117,8 +119,12 @@ export interface FindResult {
   caveats: string[];
 }
 
+// NltDistrictCode rides along on the Account expand — same field the district
+// index uses, so the Lookup tab and the Districts tab always agree. Do NOT add
+// ParentId / NltRegionId to the Account $select: both 500 from inside an
+// $expand (see districtIndex.ts).
 const CASE_EXPAND =
-  "Status($select=Name),Owner($select=Name),Account($select=Name),Contact($select=Name)";
+  "Status($select=Name),Owner($select=Name),Account($select=Name,NltDistrictCode),Contact($select=Name)";
 const CASE_SELECT = ["Id", "Number", "Subject", "CreatedOn"];
 
 function shapeCase(r: any): CaseRow {
@@ -131,6 +137,9 @@ function shapeCase(r: any): CaseRow {
     Owner: r.Owner?.Name ?? "",
     Account: r.Account?.Name ?? "",
     Contact: r.Contact?.Name ?? "",
+    // Trim as well as uppercase — the district registry stores codes trimmed,
+    // and a stray space would break the join to the Districts tab.
+    District: String(r.Account?.NltDistrictCode || "").trim().toUpperCase(),
   };
 }
 
@@ -279,6 +288,27 @@ export function extractFileImages(html: string | null | undefined): CaseImage[] 
     }
   }
   return out;
+}
+
+/** A file deliberately attached to the case (the Attachments tab in Creatio),
+ *  as opposed to an image embedded inline in a feed post or email. */
+export interface CaseFileRow {
+  Id: string;
+  Name: string;
+  Size?: number;
+  CreatedOn?: string;
+}
+
+export async function listCaseFiles(caseId: string): Promise<CaseFileRow[]> {
+  const rows = await queryRecords("CaseFile", {
+    filter: `Case/Id eq ${caseId}`,
+    select: ["Id", "Name", "Size", "CreatedOn"],
+    orderby: "CreatedOn asc",
+    top: MAX_TOP,
+  });
+  return rows
+    .filter((r) => /^[0-9a-fA-F-]{36}$/.test(r?.Id || ""))
+    .map((r) => ({ Id: r.Id, Name: String(r.Name || ""), Size: r.Size, CreatedOn: r.CreatedOn }));
 }
 
 export interface Description {

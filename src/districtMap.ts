@@ -15,7 +15,8 @@
  * default and the exact path is opportunistic.
  */
 
-import type { RepoIndex, DistrictEntry, SubRepo } from "./repoIndex.js";
+import { districtForPath, type RepoIndex, type DistrictEntry, type SubRepo } from "./repoIndex.js";
+import { resolveMentions, type FileMention } from "./fileMentions.js";
 
 export interface DistrictGuess {
   code: string; // UPPERCASE index key
@@ -31,6 +32,8 @@ export interface GuessInput {
   accountCode?: string;
   subject?: string;
   descriptionText?: string;
+  /** Files the case text names, already resolved against the index. */
+  mentions?: FileMention[];
 }
 
 /** Report-type keywords -> the subrepos they imply. */
@@ -44,6 +47,95 @@ const TYPE_HINTS: Array<{ re: RegExp; subs: SubRepo[]; label: string }> = [
   },
   { re: /\bimport\b/i, subs: ["ReportModules"], label: "mentions import" },
 ];
+
+/**
+ * The folder each report type implies for one district code, best first.
+ * The tree routes deterministically:
+ *   report card     -> ReportCardAO/<code> for codes starting A–O,
+ *                      ReportCardPZ/<code> for P–Z
+ *   transcript      -> Transcripts/<code>
+ *   progress report -> ProgressReport/<code>
+ * A few folders sit in the "wrong" half (MadisonDiocese lives in PZ), so this
+ * orders candidates; the index remains the authority on where a code exists.
+ */
+export function subreposForReportType(reportType: string, code: string): SubRepo[] {
+  switch (reportType) {
+    case "report-card": {
+      const first = (code[0] || "").toUpperCase();
+      return first && first <= "O"
+        ? ["ReportCardAO", "ReportCardPZ"]
+        : ["ReportCardPZ", "ReportCardAO"];
+    }
+    case "transcript":
+      return ["Transcripts"];
+    case "progress-report":
+      return ["ProgressReport"];
+    case "custom": {
+      // Custom reports split by the district code's FIRST LETTER, one folder per
+      // range: ReportsCustomDL/<code> holds D–L (e.g. ReportsCustomDL/DA-NJ),
+      // ReportsCustomMR/<code> holds M–R, ReportsCustomSZ/<code> holds S–Z.
+      // Verified against the tree, and unlike the report-card halves these
+      // ranges are strict — no folder is filed outside its own range.
+      //
+      // Codes starting A–C (and anything non-alphabetic) have NO custom-report
+      // folder anywhere in this tree, so express no preference: the index is
+      // the authority, and triage will correctly find no candidate and escalate
+      // rather than being pointed at the wrong range.
+      const first = (code[0] || "").toUpperCase();
+      if (first >= "D" && first <= "L")
+        return ["ReportsCustomDL", "ReportsCustomMR", "ReportsCustomSZ"];
+      if (first >= "M" && first <= "R")
+        return ["ReportsCustomMR", "ReportsCustomSZ", "ReportsCustomDL"];
+      if (first >= "S" && first <= "Z")
+        return ["ReportsCustomSZ", "ReportsCustomMR", "ReportsCustomDL"];
+      return [];
+    }
+    case "honor-roll":
+      // The ranking pairs live under Modules/HonorRoll/CUSTOM/<DSN>/, which is
+      // deeper than the <subrepo>/<code> shape the district index tracks — so
+      // this only orders any Modules folder that does match, and triage raises
+      // an escalation pointing at the honorrollrank skill.
+      return ["Modules", "ReportModules"];
+    default:
+      return [];
+  }
+}
+
+/**
+ * Every subrepo a report type is allowed to live in, regardless of district
+ * code. This is the FENCE for the edit scope — "a transcript case may only
+ * touch Transcripts" — whereas subreposForReportType() above answers the
+ * narrower "which one first for this code". They differ for custom reports: the
+ * family is all three letter ranges, while the per-code answer is the one range
+ * that code belongs to (and nothing at all for A–C, which has no folder).
+ * An empty result means the type has no opinion, so nothing gets fenced off.
+ */
+export function subreposForTypeFamily(reportType: string): SubRepo[] {
+  switch (reportType) {
+    case "report-card":
+      return ["ReportCardAO", "ReportCardPZ"];
+    case "transcript":
+      return ["Transcripts"];
+    case "progress-report":
+      return ["ProgressReport"];
+    case "custom":
+      return ["ReportsCustomDL", "ReportsCustomMR", "ReportsCustomSZ"];
+    case "honor-roll":
+      return ["Modules", "ReportModules"];
+    default:
+      return []; // "module" / "unknown" — no opinion
+  }
+}
+
+/** Order the hinted subrepos for `code`, expected report-card half first. */
+function orderTypeSubs(code: string, typeSubs: ReadonlySet<SubRepo>): SubRepo[] {
+  const subs = [...typeSubs];
+  if (typeSubs.has("ReportCardAO") && typeSubs.has("ReportCardPZ")) {
+    const [first] = subreposForReportType("report-card", code);
+    subs.sort((a, b) => (a === first ? -1 : b === first ? 1 : 0));
+  }
+  return subs;
+}
 
 /** Words that carry no discriminating power in a school name. */
 const STOP = new Set([
@@ -117,10 +209,15 @@ export function guessDistricts(
     bump(m[0], 100, `district code "${m[0]}" appears in the case text`);
   }
 
-  // --- Signal 2: a filename or path fragment naming a district folder. -----
-  const fileRe = /\b([A-Za-z][A-Za-z0-9-]{1,20})[_\-/\\][A-Za-z0-9_\-.]*\.(?:cfm|htm|html)\b/gi;
-  for (const m of blob.matchAll(fileRe)) {
-    bump(m[1], 80, `filename "${m[0]}" references this district`);
+  // --- Signal 2: a file the case names, already resolved to a real path. ---
+  // Strongest evidence short of an exact account code: the case pointed at a
+  // file that demonstrably exists, and that file lives in exactly one folder.
+  for (const mention of input.mentions || []) {
+    const weight = mention.how === "basename" || mention.ambiguous ? 60 : 120;
+    for (const p of mention.paths) {
+      const d = districtForPath(ix, p);
+      if (d) bump(d.code, weight, `the case names "${mention.raw}" → ${p}`);
+    }
   }
 
   // --- Signal 3: account name -> code. -------------------------------------
@@ -161,21 +258,62 @@ export function guessDistricts(
 
   const out: DistrictGuess[] = [];
   for (const [code, { score, why }] of scores) {
-    const entries = ix.districts.get(code) || [];
+    let entries = ix.districts.get(code) || [];
     let s = score;
     const w = [...why];
     if (typeSubs.size) {
+      // Entries in the type-implied folder lead: they feed the triage prompt's
+      // file list and the fix agent's edit scope in this order.
+      const preferred = orderTypeSubs(code, typeSubs);
+      const rank = (e: DistrictEntry): number => {
+        const i = preferred.indexOf(e.subrepo);
+        return i === -1 ? preferred.length : i;
+      };
+      entries = [...entries].sort((a, b) => rank(a) - rank(b));
+
       const hit = entries.filter((e) => typeSubs.has(e.subrepo));
       if (hit.length) {
-        s += 15;
+        s += hit.some((e) => e.subrepo === preferred[0]) ? 25 : 15;
         w.push(`${typeWhy.join(", ")} — matches ${[...new Set(hit.map((h) => h.subrepo))].join("/")}`);
       }
     }
     out.push({ code, score: s, why: w, entries });
   }
 
-  out.sort((a, b) => b.score - a.score || a.code.localeCompare(b.code));
+  // Among equal scores, a canonically-coded folder (AA-CA) beats an ad-hoc one
+  // (JAMAICA, BrooklynDioc). A pure tiebreak — it never crosses score bands.
+  const adHoc = (g: DistrictGuess): number => (g.entries.some((e) => e.strict) ? 0 : 1);
+  out.sort((a, b) => b.score - a.score || adHoc(a) - adHoc(b) || a.code.localeCompare(b.code));
   return out.slice(0, limit);
+}
+
+/**
+ * The full deterministic read of one case: which files it names, and which
+ * districts those files plus the account name point at.
+ *
+ * Two passes, because the signals feed each other. Name-based guesses come
+ * first and are used only to break ties between identically-named files
+ * ("ExamGradeLog.cfm" exists in 12 Jamaican districts); the resolved files then
+ * re-score the districts, where they outweigh every name heuristic.
+ */
+export interface CaseSignals {
+  guesses: DistrictGuess[];
+  mentions: FileMention[];
+  /** Filenames the case names that exist nowhere in the repo. */
+  unresolvedMentions: string[];
+}
+
+export function analyzeCaseSignals(ix: RepoIndex, input: GuessInput, limit = 8): CaseSignals {
+  const blob = [input.subject, input.descriptionText].filter(Boolean).join("\n");
+  const seed = guessDistricts(ix, { ...input, mentions: [] }, limit);
+  const preferDirs = seed.flatMap((g) => g.entries.map((e) => e.relDir));
+  const { mentions, unresolved } = resolveMentions(ix, blob, preferDirs);
+
+  return {
+    guesses: mentions.length ? guessDistricts(ix, { ...input, mentions }, limit) : seed,
+    mentions,
+    unresolvedMentions: unresolved,
+  };
 }
 
 /** Below this, we don't believe our own guess. */

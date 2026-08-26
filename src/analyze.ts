@@ -40,6 +40,9 @@ const PRESET_INSTRUCTIONS: Record<Exclude<Preset, "ask">, string> = {
     "case to 1-2 lines, formatted as a list keyed by case number.",
 };
 
+const ASK_INSTRUCTION =
+  "Answer the user's QUESTION (below) using ONLY the Creatio support-case data on stdin.";
+
 const SYSTEM_PROMPT =
   "You are a concise support-operations analyst for a school-information-system (SIS) " +
   "team that customizes report-card templates in Creatio. You are given support-case " +
@@ -47,6 +50,13 @@ const SYSTEM_PROMPT =
   "feed posts and emails). Analyze ONLY the data provided on stdin — do not invent facts " +
   "or use any tools. Note: timeline authors are unresolved, so never assert who wrote a " +
   "post; refer to content and @mentions only. Answer in clear, well-structured Markdown.";
+
+/** Verbatim prompts, exposed so the UI can show exactly what the AI is told. */
+export const ANALYZE_PROMPTS = {
+  systemPrompt: SYSTEM_PROMPT,
+  presets: PRESET_INSTRUCTIONS,
+  askInstruction: ASK_INSTRUCTION,
+} as const;
 
 // ---------------------------------------------------------------------------
 // Context formatting
@@ -131,9 +141,7 @@ export function analyzeCases(
   cb: AnalyzeCallbacks
 ): { kill: () => void } {
   const instruction =
-    opts.preset === "ask"
-      ? "Answer the user's QUESTION (below) using ONLY the Creatio support-case data on stdin."
-      : PRESET_INSTRUCTIONS[opts.preset];
+    opts.preset === "ask" ? ASK_INSTRUCTION : PRESET_INSTRUCTIONS[opts.preset];
 
   const { text: context, truncatedCases } = buildContext(opts.cases);
   const question = (opts.question || "").trim();

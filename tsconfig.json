@@ -6,6 +6,10 @@
     "outDir": "dist",
     "rootDir": "src",
     "strict": true,
+    // Don't write dist/ when typechecking fails. Under watch mode this keeps
+    // the last good build running (and serving) instead of replacing it with
+    // JS that throws at runtime; the compiler window shows the error.
+    "noEmitOnError": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "declaration": false,
