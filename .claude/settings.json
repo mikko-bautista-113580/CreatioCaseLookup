@@ -1,0 +1,85 @@
+{
+  "permissions": {
+    "additionalDirectories": [
+      "c:\\neldevsrc\\custom-reports"
+    ],
+    "allow": [
+      "mcp__creatio-readonly__creatio_list_allowed_entities",
+      "mcp__creatio-readonly__creatio_query_records",
+      "mcp__creatio-readonly__creatio_get_record",
+      "mcp__creatio-readonly__creatio_list_districts",
+      "mcp__creatio-readonly__creatio_district_history",
+      "mcp__creatio-readonly__creatio_case_district",
+
+      "Read(//c/neldevsrc/custom-reports/**)",
+      "Read(//c/neldevsrc/ReportCardVariablesCSV.csv)",
+      "Read(//c/neldevsrc/CustomReports-docs/**)",
+
+      "Edit(//c/neldevsrc/custom-reports/ReportCardAO/**)",
+      "Write(//c/neldevsrc/custom-reports/ReportCardAO/**)",
+      "Edit(//c/neldevsrc/custom-reports/ReportCardPZ/**)",
+      "Write(//c/neldevsrc/custom-reports/ReportCardPZ/**)",
+      "Edit(//c/neldevsrc/custom-reports/ProgressReport/**)",
+      "Write(//c/neldevsrc/custom-reports/ProgressReport/**)",
+      "Edit(//c/neldevsrc/custom-reports/Transcripts/**)",
+      "Write(//c/neldevsrc/custom-reports/Transcripts/**)",
+      "Edit(//c/neldevsrc/custom-reports/ReportsCustomDL/**)",
+      "Write(//c/neldevsrc/custom-reports/ReportsCustomDL/**)",
+      "Edit(//c/neldevsrc/custom-reports/ReportsCustomMR/**)",
+      "Write(//c/neldevsrc/custom-reports/ReportsCustomMR/**)",
+      "Edit(//c/neldevsrc/custom-reports/ReportsCustomSZ/**)",
+      "Write(//c/neldevsrc/custom-reports/ReportsCustomSZ/**)",
+      "Edit(//c/neldevsrc/custom-reports/Modules/**)",
+      "Write(//c/neldevsrc/custom-reports/Modules/**)",
+      "Edit(//c/neldevsrc/custom-reports/ReportModules/**)",
+      "Write(//c/neldevsrc/custom-reports/ReportModules/**)",
+
+      "Edit(.claude/skills/work-case/references/learned-rules.md)",
+
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git ls-files:*)",
+      "Bash(node scripts/check-cfml.mjs:*)",
+      "Bash(npm run build)"
+    ],
+    "deny": [
+      "Edit(//c/neldevsrc/custom-reports/ReportCardRoot/**)",
+      "Write(//c/neldevsrc/custom-reports/ReportCardRoot/**)",
+
+      "Bash(git commit:*)",
+      "Bash(git commit *)",
+      "Bash(git push:*)",
+      "Bash(git push *)",
+      "Bash(git checkout:*)",
+      "Bash(git checkout *)",
+      "Bash(git reset:*)",
+      "Bash(git reset *)",
+      "Bash(git restore:*)",
+      "Bash(git restore *)",
+      "Bash(git clean:*)",
+      "Bash(git clean *)",
+      "Bash(git stash:*)",
+      "Bash(git stash *)",
+      "Bash(git branch:*)",
+      "Bash(git merge:*)",
+      "Bash(git rebase:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__creatio-readonly__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/creatio-ref.cjs",
+            "once": true
+          }
+        ]
+      }
+    ]
+  }
+}

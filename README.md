@@ -9,6 +9,11 @@ Creatio access is read-only by construction: the HTTP layer only ever issues `GE
 
 > **Status:** early/active. Read-only today; a gated **write-back** capability (draft & post case updates with human approval) is on the [roadmap](#roadmap).
 
+📐 **Working on the tool itself?** [**ARCHITECTURE.md**](ARCHITECTURE.md) is the developer
+guide — the two-stage agent pipeline and the trust asymmetry it is built around, the
+module map, the route and SSE reference, the security model, and a list of the known
+defects and rough edges worth knowing before you touch anything.
+
 ---
 
 ## Features
@@ -53,7 +58,12 @@ dev-app.bat          Same app in watch mode — rebuilds + restarts on every src
 
 ## Quick start
 
-**Prerequisites:** Node.js 18+ (developed on Node 24).
+**Prerequisites:** Node.js 18+ (developed on Node 26.1).
+
+> Behind a TLS-inspecting corporate proxy, always launch through the npm scripts — they
+> pass `--use-system-ca`, without which Node 26 ignores the Windows certificate store and
+> every Creatio request fails with a bare `TypeError: fetch failed`. See
+> [ARCHITECTURE.md § defects](ARCHITECTURE.md#defects).
 
 ```bash
 git clone <your-repo-url> creatio-case-toolkit
@@ -89,14 +99,10 @@ previous code rather than crashing on broken output.
 ⚠ A restart kills any AI run in progress and clears staged work tickets, so avoid saving
 a `src/` file mid-triage or mid-work-run. Recorded fixes are on disk and unaffected.
 
-**Register the MCP server** in Claude Code (see [MCP server](#mcp-server) for `.mcp.json` form):
-
-```bash
-claude mcp add creatio-readonly \
-  --env CREATIO_BASE_URL=https://<your-tenant>.creatio.com \
-  --env CREATIO_ALLOWED_ENTITIES=Case,Activity,Contact,Account,SocialMessage \
-  -- node ./dist/index.js
-```
+**The MCP server needs no registration** — `.mcp.json` at the repo root registers
+`creatio-readonly` for any Claude Code session started in this directory. It requires
+`npm run build` to have run (it launches `dist/index.js`) and a Claude Code restart to
+pick up. Confirm with `claude mcp list`. See [MCP server](#mcp-server) for details.
 
 ---
 
@@ -204,6 +210,76 @@ paths, the approval click, and the final patch summary.
 
 ---
 
+## `/work-case` — the terminal path
+
+The 🔧 flow above lives in the web app and needs clicks. `/work-case` is the same
+job driven from a Claude Code session, for when you'd rather hand over a case
+number and read a diff.
+
+```
+/work-case SR00061864
+```
+
+It reads the case from Creatio, classifies it, locates the file(s) in
+`custom-reports`, makes the minimal fix, runs the static checker, and reports —
+then stops at an **uncommitted working-tree diff**. It never commits, never
+pushes, and never writes to Creatio.
+
+The guardrails are configuration, not good intentions. `.claude/settings.json`
+scopes `Edit`/`Write` to the eight district-bearing subrepos, **denies** writes to
+`ReportCardRoot/` (one edit there changes every district at once), and denies
+`git commit`/`push`/`checkout`/`reset`. A `PreToolUse` hook injects
+`CASE-QUERY-REFERENCE.md` on the first Creatio call so the OData gotchas are
+loaded before the first query, not after the first HTTP 500.
+
+The design goal is that it stops **only** at the skill's stop-list — a shared
+include, new-template work, honor roll, an A–C custom report, a genuine
+file-selection tie, or something it cannot see. Every other stop is treated as a
+missing rule, and the answer gets written into
+`.claude/skills/work-case/references/learned-rules.md`, which Step 3 reads first
+on the next run. That is the part that makes the interruption rate fall instead of
+plateau.
+
+### `scripts/check-cfml.mjs`
+
+There is no build, no test suite and no CI gate in `custom-reports` — a CFML
+syntax error ships straight to the NAS. This is the cheap net:
+
+```bash
+node scripts/check-cfml.mjs                       # every changed file, all subrepos
+node scripts/check-cfml.mjs --dir ReportCardAO/EH-JAM
+node scripts/check-cfml.mjs --all-lines --json
+```
+
+Checks broken `.cfm`/`.htm` pairing, unresolvable `<cfinclude>` targets,
+`dbtype="ODBC"`, unbalanced block tags, SQL interpolation without
+`<cfqueryparam>`, and `url.*`/`form.*` used without `<cfparam>`.
+
+**Scoping is the whole trick.** These repos carry a decade of legacy — almost
+every district folder has `dbtype="ODBC"` and bare `#StudentID#` interpolation. A
+checker that reported all of it would fail on every file anyone touched and be
+switched off within a day, so by default line-level findings are reported **only
+for lines the current diff adds**: "did my edit introduce this?", not "does this
+file have debt?". File-level findings always report. `--all-lines` audits
+everything.
+
+Three real-world calibrations are baked in, each of which was a false-positive
+source before it was fixed:
+
+- Pairing is checked only in `ReportCardAO`, `ReportCardPZ`, `ProgressReport` and
+  `Transcripts`, where the convention is documented. `ReportsCustomSZ` alone has
+  441 unpaired `.cfm` against 6 paired — single-file is the norm there.
+- Include resolution honours the **flattened NAS layout**: all report-card repos
+  deploy into one folder, and dispatcher templates stored in a district folder
+  deploy to the subrepo root. A target that resolves only that way is a warning,
+  not an error. Only a basename that exists nowhere in the subrepo is an error.
+- Tag balance is counted both raw and comment-stripped, and errors only when both
+  disagree. Legacy files have commented-out blocks that straddle tags
+  (`<!---<cfif …>` … `</cfif>--->`), so stripping comments can invent an imbalance
+  in a file that is genuinely fine.
+
+---
+
 ## MCP server
 
 | Tool | Description |
@@ -220,23 +296,11 @@ never build it themselves — a first build pages through ~180k case headers, wh
 is not something a tool call should do unprompted. If the index is missing they
 say so and point at the Districts tab.
 
-`.mcp.json` form:
-
-```json
-{
-  "mcpServers": {
-    "creatio-readonly": {
-      "command": "node",
-      "args": ["./dist/index.js"],
-      "env": {
-        "CREATIO_BASE_URL": "https://<your-tenant>.creatio.com",
-        "CREATIO_ALLOWED_ENTITIES": "Case,Activity,Contact,Account,SocialMessage",
-        "CREATIO_MAX_TOP": "50"
-      }
-    }
-  }
-}
-```
+Registration is committed as `.mcp.json` at the repo root, so any Claude Code
+session started in this directory picks the server up — no per-machine
+`claude mcp add`. It needs `npm run build` to have run (it launches `dist/index.js`)
+and takes auth from `.env`, which `resolveCookieEnv()` re-reads on every call, so a
+cookie refresh needs no restart.
 
 > Foreign keys like `OwnerId`/`AccountId`/`StatusId` are **not** filterable — filter through navigation paths (`Owner/Id`, `Account/Id`, `Status/Name`). See `CASE-QUERY-REFERENCE.md` for the full query recipes and gotchas.
 

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "creatio-readonly": {
+      "command": "node",
+      "args": ["--use-system-ca", "dist/index.js"],
+      "cwd": "c:\\neldevsrc\\tools\\CreatioCaseLookup",
+      "env": {
+        "CUSTOM_REPORTS_ROOT": "C:\\neldevsrc\\custom-reports"
+      }
+    }
+  }
+}
