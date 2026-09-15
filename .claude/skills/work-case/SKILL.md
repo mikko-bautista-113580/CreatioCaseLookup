@@ -9,6 +9,15 @@ One case per run. You finish at an **uncommitted working-tree diff** in
 `C:\neldevsrc\custom-reports` and a written report. You never commit, never push,
 never write to Creatio. The human commits.
 
+**The report is chat output, not a file.** Never create or edit a `.md` file
+anywhere under `C:\neldevsrc\custom-reports` — no case notes, no summaries, no
+analysis write-ups, no touching an existing `CLAUDE.md` or `README.md` there.
+Those subrepos get pushed and the user does not want that noise in them.
+`settings.json` denies it outright, so this is structural. The **only** files a
+run may change in `custom-reports` are the `.cfm`/`.htm` templates the fix
+actually needs. If a run genuinely needs a scratch file, put it in the session
+scratchpad directory, never in the repo.
+
 The point of this skill is that you **do not ask the user things that are written
 down**. Steps 2 and 3 are decision rules, not conversation. You stop only at the
 Step 6 stop-list — and every time you stop, Step 7 turns that stop into a rule so

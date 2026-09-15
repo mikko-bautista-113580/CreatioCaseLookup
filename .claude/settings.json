@@ -49,6 +49,11 @@
       "Edit(//c/neldevsrc/custom-reports/ReportCardRoot/**)",
       "Write(//c/neldevsrc/custom-reports/ReportCardRoot/**)",
 
+      "Edit(//c/neldevsrc/custom-reports/**/*.md)",
+      "Write(//c/neldevsrc/custom-reports/**/*.md)",
+      "Edit(//c/neldevsrc/custom-reports/*.md)",
+      "Write(//c/neldevsrc/custom-reports/*.md)",
+
       "Bash(git commit:*)",
       "Bash(git commit *)",
       "Bash(git push:*)",
