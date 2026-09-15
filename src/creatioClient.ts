@@ -344,12 +344,28 @@ export async function queryRecords(
   return (data && data.value) || [];
 }
 
+/**
+ * The OData path the connection check probes: one primary key from the first
+ * allowed entity. Exported so the "always narrow $select" contract is testable
+ * without a network call.
+ *
+ * $select is deliberately narrowed to Id. An unqualified read asks Creatio to
+ * serialize EVERY column of the entity, so a single column that fails to
+ * serialize answers with "HTTP 500 ObjectContent`1 type failed to serialize"
+ * even on a perfectly valid session — which the Settings screen then reports as
+ * a credentials problem. One primary key tests exactly what this check is for:
+ * session validity and reachability.
+ */
+export function connectionProbePath(): string {
+  const entity = ALLOWED_ENTITIES[0] || "Contact";
+  return entity + buildQuery({ select: ["Id"], top: 1 });
+}
+
 /** Lightweight auth/connectivity check — reads 1 row of the first allowed
  *  entity (or Contact). Returns {ok:true} or {ok:false, error}. */
 export async function testConnection(): Promise<{ ok: boolean; error?: string }> {
-  const entity = ALLOWED_ENTITIES[0] || "Contact";
   try {
-    await odataGet(entity + buildQuery({ top: 1 }));
+    await odataGet(connectionProbePath());
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };

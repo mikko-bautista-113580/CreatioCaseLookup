@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "creatio-readonly": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["dist/index.js"],
+      "env": {}
+    }
+  }
+}

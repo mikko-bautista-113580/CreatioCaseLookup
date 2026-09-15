@@ -40,7 +40,10 @@ async function testCookies() {
 
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}/0/odata/${entity}?$top=1`, {
+    // $select=Id keeps this a pure session check: an unqualified read makes
+    // Creatio serialize every column, so one column that fails to serialize
+    // returns a 500 that would be mistaken for an auth problem.
+    res = await fetch(`${BASE_URL}/0/odata/${entity}?$top=1&$select=Id`, {
       method: "GET",
       headers: { Accept: "application/json", Cookie: cookie, BPMCSRF, ForceUseSession: "true" },
     });

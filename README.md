@@ -59,20 +59,19 @@ npm run app               # builds, starts the server, opens http://127.0.0.1:30
 
 On Windows you can just double-click **`start-app.bat`**.
 
-**Register the MCP server** in Claude Code (see [MCP server](#mcp-server) for `.mcp.json` form):
+**The MCP server is already registered** — this repo ships a project-scoped [`.mcp.json`](.mcp.json), so Claude Code picks it up automatically when opened on this folder. Run `npm run build` first (`dist/` is git-ignored), then approve the server when prompted.
+
+To register it somewhere else instead:
 
 ```bash
-claude mcp add creatio-readonly \
-  --env CREATIO_BASE_URL=https://<your-tenant>.creatio.com \
-  --env CREATIO_ALLOWED_ENTITIES=Case,Activity,Contact,Account,SocialMessage \
-  -- node ./dist/index.js
+claude mcp add creatio-readonly -- node ./dist/index.js
 ```
 
 ---
 
 ## Configuration
 
-All settings live in `.env` (and, for the MCP server, in its client registration). **Never commit `.env`** — it holds live credentials/cookies (it's git-ignored by default).
+All settings live in `.env` — the MCP server loads it from the project root itself (relative to `dist/`), so its registration needs no `env` block and both the server and the web app read the same file. **Never commit `.env`** — it holds live credentials/cookies (it's git-ignored by default).
 
 | Variable | Purpose |
 |---|---|
@@ -83,7 +82,7 @@ All settings live in `.env` (and, for the MCP server, in its client registration
 | `CREATIO_MAX_TOP` | Max rows per query (default 50) |
 | `CREATIO_APP_PORT` | Web app port (default 3000) |
 | `CREATIO_APP_NO_OPEN` | Set `1` to stop the app auto-opening the browser |
-| `CREATIO_APP_MODEL` | Model for AI analysis (e.g. `sonnet`, `haiku`); default = your CLI default |
+| `CREATIO_APP_MODEL` | Model for AI analysis; default `claude-opus-5`. Set `claude-sonnet-5` or `claude-haiku-4-5` for cheaper/faster runs |
 
 ### Authentication
 
@@ -109,7 +108,7 @@ The server binds to `127.0.0.1` only and the only file it ever writes is your lo
 With the **Claude CLI** installed and logged in, the results view shows an **"Analyze with AI"** bar — Summarize & prioritize, Common themes, Next actions, or a free-text question, streamed live and rendered as Markdown (copy / download as `.md`). Tick row checkboxes to analyze a subset; each row also has a "✨ analyze this one" button.
 
 - Enable: `npm i -g @anthropic-ai/claude-code`, then run `claude` once to sign in. Uses **your Claude subscription — no API key**.
-- Runs `claude -p` locally, **isolated** (no tools, no MCP, empty temp cwd); only the selected cases' **text** is sent — never your cookies. Set `CREATIO_APP_MODEL=sonnet` (or `haiku`) for cheaper/faster runs.
+- Runs `claude -p` locally, **isolated** (no tools, no MCP, empty temp cwd); only the selected cases' **text** is sent — never your cookies. Defaults to **Claude Opus 5** (`claude-opus-5`); set `CREATIO_APP_MODEL=claude-sonnet-5` (or `claude-haiku-4-5`) for cheaper/faster runs.
 
 ---
 
@@ -121,23 +120,22 @@ With the **Claude CLI** installed and logged in, the results view shows an **"An
 | `creatio_query_records` | OData query (`$filter`, `$select`, `$orderby`, `$top`, `$expand`) |
 | `creatio_get_record` | Fetch one record by GUID |
 
-`.mcp.json` form:
+Registered via the project-scoped [`.mcp.json`](.mcp.json) in this repo — config comes from `.env`, so no `env` block is needed:
 
 ```json
 {
   "mcpServers": {
     "creatio-readonly": {
+      "type": "stdio",
       "command": "node",
-      "args": ["./dist/index.js"],
-      "env": {
-        "CREATIO_BASE_URL": "https://<your-tenant>.creatio.com",
-        "CREATIO_ALLOWED_ENTITIES": "Case,Activity,Contact,Account,SocialMessage",
-        "CREATIO_MAX_TOP": "50"
-      }
+      "args": ["dist/index.js"],
+      "env": {}
     }
   }
 }
 ```
+
+Requires `npm run build` — the path points at `dist/`, which is git-ignored. Anything set in an `env` block would take precedence over `.env`, since `.env` loading never overrides vars already in the process environment.
 
 > Foreign keys like `OwnerId`/`AccountId`/`StatusId` are **not** filterable — filter through navigation paths (`Owner/Id`, `Account/Id`, `Status/Name`). See `CASE-QUERY-REFERENCE.md` for the full query recipes and gotchas.
 

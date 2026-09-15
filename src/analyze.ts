@@ -19,6 +19,12 @@ import { join } from "node:path";
 import type { CaseRow, CaseDetail, TimelineEntry } from "./caseLookup.js";
 
 // ---------------------------------------------------------------------------
+// Default model for analysis. Overridable per-run (CREATIO_APP_MODEL); set to
+// a cheaper tier (e.g. "claude-sonnet-5", "claude-haiku-4-5") for faster runs.
+// ---------------------------------------------------------------------------
+export const DEFAULT_MODEL = "claude-opus-5";
+
+// ---------------------------------------------------------------------------
 // Locate the claude binary once.
 // ---------------------------------------------------------------------------
 let CLAUDE_BIN: string | null | undefined;
@@ -150,7 +156,7 @@ export interface AnalyzeOptions {
   preset: Preset;
   question?: string; // required when preset === 'ask'
   cases: AnalyzableCase[];
-  model?: string; // optional override
+  model?: string; // optional override; defaults to DEFAULT_MODEL
   signal?: AbortSignal;
 }
 
@@ -199,7 +205,7 @@ export function analyzeCases(opts: AnalyzeOptions, cb: AnalyzeCallbacks): { kill
     "--append-system-prompt",
     SYSTEM_PROMPT,
   ];
-  if (opts.model) args.push("--model", opts.model);
+  args.push("--model", opts.model || DEFAULT_MODEL);
 
   let cwd: string;
   try {
