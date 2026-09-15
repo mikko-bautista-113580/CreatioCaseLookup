@@ -827,6 +827,61 @@ async function testConn() {
 }
 $("#testCfgBtn").addEventListener("click", testConn);
 
+// Interactive browser login — opens a real browser at Creatio's login page and
+// captures the session cookies when the user finishes signing in. Progress
+// arrives over SSE because the sign-in (with MFA) can take minutes.
+async function browserLogin() {
+  const btn = $("#browserLoginBtn");
+  const s = $("#loginStatus");
+  btn.disabled = true;
+  s.innerHTML = '<span class="spinner"></span> Opening browser…';
+  s.className = "status";
+  try {
+    const res = await fetch("/api/browser-login", { method: "POST" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || `Login failed (${res.status})`);
+    }
+    let settled = false;
+    await consumeSse(res.body, {
+      progress: (d) => {
+        s.innerHTML = '<span class="spinner"></span> ' + esc(d.message || "Working…");
+        s.className = "status";
+      },
+      done: (d) => {
+        settled = true;
+        if (d.connection && d.connection.ok) {
+          s.textContent = "Signed in — connection OK.";
+          s.className = "status ok";
+          hideAuthBanner();
+        } else {
+          s.textContent =
+            "Signed in, but the connection test failed: " +
+            ((d.connection && d.connection.error) || "").slice(0, 160);
+          s.className = "status err";
+        }
+        loadConfig();
+      },
+      error: (d) => {
+        settled = true;
+        s.textContent =
+          d.kind === "cancelled" ? "Login cancelled." : "Login failed: " + (d.message || "").slice(0, 200);
+        s.className = "status err";
+      },
+    });
+    if (!settled) {
+      s.textContent = "Login ended unexpectedly.";
+      s.className = "status err";
+    }
+  } catch (e) {
+    s.textContent = e.message;
+    s.className = "status err";
+  } finally {
+    btn.disabled = false;
+  }
+}
+$("#browserLoginBtn").addEventListener("click", browserLogin);
+
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------

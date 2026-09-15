@@ -248,6 +248,14 @@ async function handleApi(
     return;
   }
 
+  // Settings: interactive browser login. Opens a real browser at Creatio's
+  // login page, waits for the user to sign in, and captures the session
+  // cookies — streams progress via SSE since this can take minutes (MFA).
+  if (req.method === "POST" && path === "/api/browser-login") {
+    await handleBrowserLogin(res);
+    return;
+  }
+
   // AI analysis of a set of cases — streams the model output via SSE.
   if (req.method === "POST" && path === "/api/analyze") {
     await handleAnalyze(req, res);
@@ -340,6 +348,65 @@ async function handleCases(req: IncomingMessage, res: ServerResponse): Promise<v
   const CONCURRENCY = 4;
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker()));
   if (!aborted.v) sse(res, "done", {});
+  res.end();
+}
+
+async function handleBrowserLogin(res: ServerResponse): Promise<void> {
+  // Read the base URL from .env rather than the startup constant so a URL the
+  // user just saved in Settings works without restarting the app.
+  const baseUrl = (readEnvFile().CREATIO_BASE_URL || BASE_URL || "").replace(/\/+$/, "");
+  if (!baseUrl) {
+    return sendJson(res, 400, {
+      error: "server",
+      message: "Set the Creatio base URL first, then log in.",
+    });
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+
+  try {
+    // Imported lazily so a missing/broken playwright-core only breaks login
+    // rather than stopping the whole app from starting.
+    const { loginViaBrowser, LoginCancelledError } = await import("./browserLogin.js");
+    try {
+      const cookies = await loginViaBrowser(baseUrl, (message) => sse(res, "progress", { message }));
+      const updates: Record<string, string> = {
+        CREATIO_ASPXAUTH: cookies.aspx,
+        CREATIO_BPMCSRF: cookies.csrf,
+      };
+      // BPMLOADER is optional — don't blank an existing value if it wasn't set.
+      if (cookies.loader) updates.CREATIO_BPMLOADER = cookies.loader;
+      writeEnvFile(updates);
+
+      sse(res, "progress", { message: "Verifying connection…" });
+      // The login browser has only just shut down; the first probe out of Node
+      // can catch a transient socket/DNS blip (undici surfaces those as a bare
+      // "fetch failed"). One retry keeps a blip from looking like a hard failure.
+      let connection = await testConnection();
+      if (!connection.ok) {
+        await new Promise((r) => setTimeout(r, 1500));
+        connection = await testConnection();
+      }
+      sse(res, "done", { connection });
+    } catch (e) {
+      const cancelled = e instanceof LoginCancelledError;
+      sse(res, "error", {
+        kind: cancelled ? "cancelled" : "server",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  } catch (e) {
+    sse(res, "error", {
+      kind: "server",
+      message:
+        "Browser login is unavailable — playwright-core failed to load. Run `npm install`. " +
+        (e instanceof Error ? e.message : String(e)),
+    });
+  }
   res.end();
 }
 

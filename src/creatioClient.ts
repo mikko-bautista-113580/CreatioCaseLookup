@@ -210,8 +210,13 @@ export async function login(): Promise<void> {
   // browser session), but the cookies live in .env — so on expiry we re-read the
   // file: if you've refreshed it, we pick up the new cookies and carry on; if
   // it's unchanged, we report the clear error. No restart needed either way.
-  if (COOKIE_MODE) {
-    const fresh = resolveCookieEnv();
+  // Decide cookie-vs-forms mode from what is on disk RIGHT NOW rather than from
+  // the import-time COOKIE_MODE. The app's browser login writes cookies into a
+  // .env that may have had none when the server started; that has to take
+  // effect without a restart, or we would fall through to forms auth (with
+  // empty credentials) and fail even though valid cookies are sitting on disk.
+  const fresh = resolveCookieEnv();
+  if (fresh.aspx && fresh.csrf) {
     const changed = fresh.aspx !== lastSeededAspx || fresh.csrf !== lastSeededCsrf;
     if (bpmcsrf && !changed) {
       throw new AuthError(
@@ -361,6 +366,26 @@ export function connectionProbePath(): string {
   return entity + buildQuery({ select: ["Id"], top: 1 });
 }
 
+/**
+ * undici reports every transport-level failure as a bare "fetch failed", which
+ * tells the user nothing. Dig the real cause out of the error chain (ECONNRESET,
+ * ENOTFOUND, cert errors, connect timeouts) so the UI can show something
+ * actionable instead.
+ */
+export function describeError(e: unknown): string {
+  if (!(e instanceof Error)) return String(e);
+  const parts: string[] = [];
+  let cur = (e as Error & { cause?: unknown }).cause as
+    | (Error & { code?: string; cause?: unknown })
+    | undefined;
+  for (let i = 0; cur && i < 5; i++) {
+    const bit = cur.code || cur.message;
+    if (bit && bit !== e.message && !parts.includes(bit)) parts.push(bit);
+    cur = cur.cause as typeof cur;
+  }
+  return parts.length ? `${e.message} (${parts.join(" → ")})` : e.message;
+}
+
 /** Lightweight auth/connectivity check — reads 1 row of the first allowed
  *  entity (or Contact). Returns {ok:true} or {ok:false, error}. */
 export async function testConnection(): Promise<{ ok: boolean; error?: string }> {
@@ -368,6 +393,6 @@ export async function testConnection(): Promise<{ ok: boolean; error?: string }>
     await odataGet(connectionProbePath());
     return { ok: true };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    return { ok: false, error: describeError(e) };
   }
 }

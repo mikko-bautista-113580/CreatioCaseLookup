@@ -100,23 +100,37 @@
         <fieldset class="cookies">
           <legend>Session cookies (SSO)</legend>
           <p class="hint">
-            Get these from your browser after logging in to Creatio:
-            <strong>DevTools (F12) → Application → Cookies</strong> → your Creatio URL.
-            Copy the <em>values</em>. Leave a field blank to keep the current value.
+            Click below to open a browser at the Creatio login page. Once you finish
+            signing in there (including any MFA prompt), the session cookies are
+            captured automatically — no copy/paste needed.
           </p>
-          <div class="field">
-            <label for="cfgAspx">.ASPXAUTH <span id="stAspx" class="pill"></span></label>
-            <input id="cfgAspx" type="password" placeholder="paste .ASPXAUTH value" autocomplete="off" />
+          <div class="actions">
+            <button id="browserLoginBtn" class="primary">Log in with Creatio…</button>
+            <span id="loginStatus" class="status"></span>
           </div>
-          <div class="field">
-            <label for="cfgCsrf">BPMCSRF <span id="stCsrf" class="pill"></span></label>
-            <input id="cfgCsrf" type="password" placeholder="paste BPMCSRF value" autocomplete="off" />
-          </div>
-          <div class="field">
-            <label for="cfgLoader">BPMLOADER <span id="stLoader" class="pill"></span> <span class="muted">(optional)</span></label>
-            <input id="cfgLoader" type="password" placeholder="paste BPMLOADER value" autocomplete="off" />
-          </div>
-          <label class="reveal"><input type="checkbox" id="revealCookies" /> Show cookie values</label>
+
+          <details class="manual-cookies">
+            <summary>Enter cookies manually instead</summary>
+            <p class="hint">
+              Fallback if no browser can be launched: get these from your browser after
+              logging in to Creatio — <strong>DevTools (F12) → Application → Cookies</strong>
+              → your Creatio URL. Copy the <em>values</em>. Leave a field blank to keep the
+              current value.
+            </p>
+            <div class="field">
+              <label for="cfgAspx">.ASPXAUTH <span id="stAspx" class="pill"></span></label>
+              <input id="cfgAspx" type="password" placeholder="paste .ASPXAUTH value" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="cfgCsrf">BPMCSRF <span id="stCsrf" class="pill"></span></label>
+              <input id="cfgCsrf" type="password" placeholder="paste BPMCSRF value" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="cfgLoader">BPMLOADER <span id="stLoader" class="pill"></span> <span class="muted">(optional)</span></label>
+              <input id="cfgLoader" type="password" placeholder="paste BPMLOADER value" autocomplete="off" />
+            </div>
+            <label class="reveal"><input type="checkbox" id="revealCookies" /> Show cookie values</label>
+          </details>
         </fieldset>
 
         <div class="two-col">

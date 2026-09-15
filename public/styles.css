@@ -332,3 +332,14 @@ td.row-actions { white-space: nowrap; display: flex; gap: 0.3rem; align-items: c
   .two-col { grid-template-columns: 1fr; }
   .ai-ask { flex-direction: column; }
 }
+
+/* Manual cookie entry — collapsed fallback under the browser-login button. */
+.manual-cookies { margin-top: 0.9rem; border-top: 1px solid var(--line); padding-top: 0.7rem; }
+.manual-cookies > summary {
+  cursor: pointer; font-size: 0.82rem; font-weight: 600; color: var(--muted);
+  list-style: none; user-select: none;
+}
+.manual-cookies > summary::-webkit-details-marker { display: none; }
+.manual-cookies > summary::before { content: "\25B8 "; display: inline-block; transition: transform 0.15s ease; }
+.manual-cookies[open] > summary::before { transform: rotate(90deg); }
+.manual-cookies > summary:hover { color: var(--brand); }
