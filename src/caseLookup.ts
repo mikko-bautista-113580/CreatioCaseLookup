@@ -10,8 +10,11 @@
  *    the FK columns (OwnerId/AccountId/StatusId) — those return HTTP 500.
  *  - Activity has no queryable CaseId — link emails to a case by matching the
  *    case number in the Title (contains(Title,'SR...')).
- *  - Feed/email AUTHORS do not resolve over this OData access — leave unresolved
- *    and never infer from @mentions.
+ *  - Feed/email AUTHORS DO resolve: SocialMessage.CreatedById is a *Contact* Id
+ *    (NOT a SysAdminUnit Id, which is what the old note assumed), so one batched
+ *    Contact read names every poster. Email senders resolve by matching
+ *    Activity.Sender against Contact.Email. Never infer an author from an
+ *    @mention in the body — that is still a guess and has been wrong.
  */
 
 import { MAX_TOP, odataGet, buildQuery, queryRecords, FILE_DOWNLOAD_ENTITIES } from "./creatioClient.js";
@@ -211,8 +214,25 @@ export interface CaseImage {
  *  no raw Creatio HTML ever reaches the DOM (no XSS surface). */
 export type Segment =
   | { type: "text"; text: string }
+  | { type: "list"; ordered: boolean; items: string[] }
   | { type: "image"; entity: string; id: string }
   | { type: "image"; dataUri: string };
+
+/**
+ * Sentinels wrapping an @mention's display name inside segment text.
+ *
+ * Private-use code points, so they cannot collide with real case text, and they
+ * pass through HTML-escaping untouched. The UI escapes first and swaps them for
+ * a chip afterwards, which keeps the "no raw Creatio HTML reaches the DOM"
+ * guarantee. Keep these in sync with public/app.js.
+ */
+export const MENTION_OPEN = "\uE000";
+export const MENTION_CLOSE = "\uE001";
+
+/** Flatten mention sentinels back to plain "@Name", for text-only consumers. */
+export function plainMentions(s: string): string {
+  return s.split(MENTION_OPEN).join("@").split(MENTION_CLOSE).join("");
+}
 
 /** Decode the handful of entities strip() handles, but KEEP newlines. */
 function decodeEntities(s: string): string {
@@ -230,30 +250,92 @@ function decodeEntities(s: string): string {
  *  and <br> become newlines; whitelisted FileService images and data: images
  *  become image segments (in place); all other tags are dropped. */
 export function htmlToSegments(html: string | null | undefined): Segment[] {
-  const src = (html || "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<!--[\s\S]*?-->/g, "");
+  const src = (html || "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    // A mention is an <a> wrapping an avatar <span> whose text is the person's
+    // first initial. Tokenized verbatim that reads "NNolan Kelliher", so replace
+    // the whole anchor with just its display name, between mention sentinels.
+    .replace(
+      /<a[^>]*data-mention-display-value="([^"]*)"[^>]*>[\s\S]*?<\/a>/gi,
+      (_m, name: string) => MENTION_OPEN + name + MENTION_CLOSE
+    );
+
   const segs: Segment[] = [];
   let buf = "";
-  const flush = () => {
-    const t = decodeEntities(buf).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").replace(/[ \t]{2,}/g, " ").trim();
-    if (t) segs.push({ type: "text", text: t });
+  // Non-null while inside <ul>/<ol>, so each <li> becomes its own item instead
+  // of running together into one paragraph.
+  let list: { ordered: boolean; items: string[] } | null = null;
+
+  /**
+   * Drain the buffer as one normalized block.
+   *
+   * Creatio pretty-prints its HTML, so block tags and <li> arrive wrapped in
+   * literal tabs and newlines. Left alone those survive into the UI as a ragged
+   * indent. Normalize per line — NBSP to a plain space, inner runs collapsed,
+   * and whitespace that only came from source formatting dropped — so every
+   * block starts at the same left edge.
+   */
+  const take = (): string => {
+    const t = decodeEntities(buf)
+      .replace(/\u00A0/g, " ")
+      // Zero-width junk Creatio's editor leaves behind, mostly around mentions.
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .map((line) => line.replace(/[ \t]{2,}/g, " ").trim())
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
     buf = "";
+    return t;
   };
-  const re = /<img\b[^>]*>|<\/(?:div|p|li|tr|h[1-6])>|<br\s*\/?>|<[^>]+>|[^<]+/gi;
+  const flushText = () => {
+    const t = take();
+    if (t) segs.push({ type: "text", text: t });
+  };
+  const flushItem = () => {
+    const t = take();
+    if (t && list) list.items.push(t);
+  };
+  const closeList = () => {
+    if (!list) return;
+    flushItem();
+    if (list.items.length) segs.push({ type: "list", ordered: list.ordered, items: list.items });
+    list = null;
+  };
+
+  const re =
+    /<img\b[^>]*>|<(?:ul|ol)\b[^>]*>|<\/(?:ul|ol)>|<li\b[^>]*>|<\/li>|<\/(?:div|p|tr|h[1-6])>|<br\s*\/?>|<[^>]+>|[^<]+/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(src))) {
     const tok = m[0];
     if (/^<img/i.test(tok)) {
       const s = (tok.match(/src\s*=\s*"([^"]*)"/i) || [])[1] || "";
       const fs = s.match(FILE_SRC_RE);
+      const emit = (seg: Segment) => {
+        if (list) flushItem();
+        else flushText();
+        segs.push(seg);
+      };
       if (fs && ALLOWED_FILE_ENTITIES.includes(fs[1])) {
-        flush();
-        segs.push({ type: "image", entity: fs[1], id: fs[2] });
+        emit({ type: "image", entity: fs[1], id: fs[2] });
       } else if (/^data:image\/(png|jpe?g|gif|webp|bmp);base64,/i.test(s)) {
-        flush();
-        segs.push({ type: "image", dataUri: s });
+        emit({ type: "image", dataUri: s });
       }
       // else: drop (cid:, external tracking, unknown)
-    } else if (/^<\/(?:div|p|li|tr|h[1-6])>$/i.test(tok) || /^<br/i.test(tok)) {
+    } else if (/^<(?:ul|ol)\b/i.test(tok)) {
+      // A nested list just continues as a flat one — good enough for case text,
+      // and far less fragile than tracking depth.
+      closeList();
+      flushText();
+      list = { ordered: /^<ol/i.test(tok), items: [] };
+    } else if (/^<\/(?:ul|ol)>$/i.test(tok)) {
+      closeList();
+    } else if (/^<li\b/i.test(tok) || /^<\/li>$/i.test(tok)) {
+      if (list) flushItem();
+      else buf += "\n";
+    } else if (/^<\/(?:div|p|tr|h[1-6])>$/i.test(tok) || /^<br/i.test(tok)) {
       buf += "\n";
     } else if (/^<[^>]+>$/.test(tok)) {
       /* other tag: ignore */
@@ -261,7 +343,8 @@ export function htmlToSegments(html: string | null | undefined): Segment[] {
       buf += tok;
     }
   }
-  flush();
+  closeList();
+  flushText();
   return segs;
 }
 
@@ -304,13 +387,60 @@ export interface TimelineEntry {
   title?: string;
   sender?: string;
   recipient?: string;
+  /** Who posted, resolved to a Contact name. Left undefined when it could not
+   *  be resolved — the UI says "Unknown author" rather than showing a GUID. */
+  author?: string;
+  /** The Contact Id behind `author`, so the UI can mark your own posts. */
+  authorId?: string;
+}
+
+const EMPTY_GUID = "00000000-0000-0000-0000-000000000000";
+/** OR-chains get long fast, and an over-long filter is what makes Creatio 500. */
+const CONTACT_BATCH = 20;
+
+/** Pull the bare address out of "Name <a@b.c>" or a raw address. */
+function emailAddress(v: string | null | undefined): string {
+  return ((v || "").match(/[\w.+-]+@[\w-]+\.[\w.-]+/) || [""])[0].toLowerCase();
+}
+
+/**
+ * Batched Contact lookups, keyed by whichever column was matched.
+ *
+ * Best-effort by design: naming a poster is a nicety, so a failed read (Contact
+ * missing from the allowlist, an expired cookie) yields an empty map and the
+ * timeline still renders — it just says "Unknown author".
+ */
+async function contactMap(
+  values: (string | null | undefined)[],
+  clause: (v: string) => string,
+  key: "Id" | "Email"
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const unique = [...new Set(values.filter((v): v is string => !!v && v !== EMPTY_GUID))];
+  for (let i = 0; i < unique.length; i += CONTACT_BATCH) {
+    const chunk = unique.slice(i, i + CONTACT_BATCH);
+    try {
+      const rows = await queryRecords("Contact", {
+        filter: chunk.map(clause).join(" or "),
+        select: ["Id", "Name", "Email"],
+        top: chunk.length,
+      });
+      for (const r of rows) {
+        const k = String(r[key] ?? "").toLowerCase();
+        if (k && r.Name) out.set(k, r.Name);
+      }
+    } catch {
+      /* leave this chunk unresolved */
+    }
+  }
+  return out;
 }
 
 export async function getTimeline(caseId: string, caseNumber: string): Promise<TimelineEntry[]> {
   // Feed posts, linked by EntityId = the Case Id.
   const feed = await queryRecords("SocialMessage", {
     filter: `EntityId eq ${caseId}`,
-    select: ["Id", "Message", "CreatedOn"],
+    select: ["Id", "Message", "CreatedOn", "CreatedById"],
     orderby: "CreatedOn asc",
     top: MAX_TOP,
   });
@@ -323,12 +453,27 @@ export async function getTimeline(caseId: string, caseNumber: string): Promise<T
     top: MAX_TOP,
   });
 
+  // Name the posters. CreatedById is a Contact Id, so the whole feed resolves in
+  // one batched read; email senders are matched on their address.
+  const byId = await contactMap(
+    feed.map((f) => f.CreatedById),
+    (id) => `Id eq ${id}`,
+    "Id"
+  );
+  const byEmail = await contactMap(
+    mail.map((m) => emailAddress(m.Sender)),
+    (e) => `Email eq '${odataLit(e)}'`,
+    "Email"
+  );
+
   const entries: TimelineEntry[] = [
     ...feed.map((f) => ({
       kind: "FEED" as const,
       ts: f.CreatedOn,
       text: strip(f.Message),
       segments: htmlToSegments(f.Message), // clean rich text: render inline (incl. FeedFile images)
+      authorId: f.CreatedById,
+      author: byId.get(String(f.CreatedById || "").toLowerCase()),
     })),
     ...mail.map((m) => ({
       kind: "EMAIL" as const,
@@ -336,6 +481,8 @@ export async function getTimeline(caseId: string, caseNumber: string): Promise<T
       title: m.Title,
       sender: m.Sender,
       recipient: m.Recepient, // note: Creatio's field is misspelled "Recepient"
+      // Fall back to the raw address — it still tells you who wrote.
+      author: byEmail.get(emailAddress(m.Sender)) || m.Sender || undefined,
       text: trimReply(strip(m.Body)),
       images: extractFileImages(m.Body), // only real attachments; skip signature/tracking noise
     })),
@@ -354,6 +501,39 @@ export interface ExtraFields {
   SolutionDate?: string;
   SolutionOverdue?: boolean;
   NltHoursWorked?: number;
+}
+
+export interface CaseAttachment {
+  id: string;
+  name: string;
+  size: number;
+  createdOn: string;
+}
+
+/**
+ * Files on the case's Attachments tab.
+ *
+ * Goes through queryRecords, so the entity allowlist still applies: `CaseFile`
+ * must be in CREATIO_ALLOWED_ENTITIES or this throws. Only metadata is read —
+ * the bytes are served separately by the existing read-only /api/file proxy,
+ * which already permits CaseFile.
+ *
+ * `Case/Id eq <guid>` is the navigation path; the guid is NOT quoted, and
+ * filtering on a `CaseId` column would fail the same way it does elsewhere.
+ */
+export async function getAttachments(caseId: string): Promise<CaseAttachment[]> {
+  const rows = await queryRecords("CaseFile", {
+    select: ["Id", "Name", "Size", "CreatedOn"],
+    filter: `Case/Id eq ${caseId}`,
+    orderby: "CreatedOn desc",
+    top: 25,
+  });
+  return rows.map((r: any) => ({
+    id: r.Id,
+    name: r.Name || "",
+    size: Number(r.Size) || 0,
+    createdOn: r.CreatedOn || "",
+  }));
 }
 
 export async function getExtraFields(caseId: string): Promise<ExtraFields> {

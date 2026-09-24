@@ -169,17 +169,72 @@ table.cases td.num { font-family: monospace; white-space: nowrap; }
 .expand-btn { background: none; border: none; color: var(--brand); cursor: pointer; font-weight: 700; font-size: 0.85rem; }
 .detail-cell { background: var(--bg); }
 .detail-box { padding: 0.5rem 0.25rem; }
+/* Case detail tabs — Creatio's Timeline / General info split. */
+.dtabs { display: flex; gap: 1.1rem; border-bottom: 1px solid var(--line); margin-bottom: 0.5rem; }
+.dtab {
+  appearance: none; background: none; border: 0; cursor: pointer;
+  padding: 0.4rem 0.1rem; margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  font: inherit; font-size: 0.78rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--brand);
+}
+.dtab:hover { color: var(--ink); }
+.dtab.active { color: var(--ink); border-bottom-color: var(--danger); }
+/* The first heading in a pane sits right under the tab bar. */
+.dpane > h4:first-child { margin-top: 0.2rem; }
 .detail-box h4 { margin: 0.6rem 0 0.3rem; font-size: 0.8rem; text-transform: uppercase; color: var(--muted); letter-spacing: 0.04em; }
-.desc { font-size: 0.88rem; white-space: pre-wrap; }
+.desc { font-size: 0.88rem; line-height: 1.55; max-width: 74ch; }
+/* Only the plain-text fallback still needs pre-wrap; rich segments are real
+   <p> blocks, which is what keeps every paragraph on the same left edge. */
+.desc:not(.rich) { white-space: pre-wrap; }
 .timeline { list-style: none; margin: 0; padding: 0; }
 .tl-entry { padding: 0.5rem 0.6rem; border-left: 3px solid var(--line); margin: 0.35rem 0; background: var(--card); border-radius: 0 8px 8px 0; }
 .tl-entry.EMAIL { border-left-color: var(--brand); }
 .tl-entry.FEED { border-left-color: var(--ok); }
-.tl-head { display: flex; gap: 0.5rem; align-items: baseline; font-size: 0.75rem; color: var(--muted); margin-bottom: 0.2rem; flex-wrap: wrap; }
+/* Avatar on the left, byline over timestamp on the right — the Creatio
+   timeline reading order: who, then what, then when. */
+.tl-head { display: flex; gap: 0.55rem; align-items: flex-start; margin-bottom: 0.45rem; }
+.tl-avatar {
+  flex: none; width: 2rem; height: 2rem; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.02em;
+}
+.tl-headtext { min-width: 0; }
+.tl-byline { display: flex; gap: 0.4rem; align-items: baseline; flex-wrap: wrap; }
+.tl-author { font-size: 0.87rem; font-weight: 600; color: var(--brand); }
+.tl-author.unknown { font-weight: 500; font-style: italic; color: var(--muted); }
+.tl-verb { font-size: 0.78rem; color: var(--muted); }
+.tl-when { font-size: 0.74rem; color: var(--muted); margin-top: 0.1rem; }
+.tl-you {
+  font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 0.05rem 0.35rem; border-radius: 999px;
+  background: var(--accent); color: var(--brand);
+}
+
+/* @mention chip — a tinted pill with the person's initial, as Creatio shows it. */
+.mention {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  padding: 0.02rem 0.45rem 0.02rem 0.15rem; margin: 0 0.05rem;
+  border-radius: 999px; background: var(--accent); color: var(--brand);
+  font-weight: 600; font-size: 0.95em; line-height: 1.5; white-space: nowrap;
+  vertical-align: baseline;
+}
+.mention-dot {
+  flex: none; width: 1.15em; height: 1.15em; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 0.72em; font-weight: 700;
+}
+
+/* Bullet / numbered lists carried over from the case's own HTML. */
+.seg-list { margin: 0.1rem 0 0.55rem; padding-left: 1.4rem; }
+.seg-list li { margin: 0.22rem 0; }
+.seg-list:last-child { margin-bottom: 0; }
 .tl-kind { font-weight: 700; letter-spacing: 0.03em; }
 .tl-kind.EMAIL { color: var(--brand); }
 .tl-kind.FEED { color: var(--ok); }
-.tl-text { font-size: 0.87rem; white-space: pre-wrap; }
+.tl-text { font-size: 0.87rem; line-height: 1.55; max-width: 74ch; }
+.tl-text:not(.rich) p { margin: 0 0 0.45rem; }
+.tl-text:not(.rich) p:last-child { margin-bottom: 0; }
 .tl-meta { font-size: 0.75rem; color: var(--muted); }
 .extra-grid { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.75rem; font-size: 0.85rem; }
 .extra-grid .k { color: var(--muted); }
@@ -305,7 +360,8 @@ td.row-actions { white-space: nowrap; display: flex; gap: 0.3rem; align-items: c
 
 /* Inline attachments / images */
 .desc.rich, .tl-text.rich { display: flex; flex-direction: column; gap: 0.4rem; }
-.seg-text { white-space: pre-wrap; }
+.seg-text p { margin: 0 0 0.5rem; }
+.seg-text p:last-child { margin-bottom: 0; }
 .seg-img {
   max-width: min(100%, 520px); height: auto; border-radius: 8px; border: 1px solid var(--line);
   cursor: zoom-in; display: block; background: var(--card); transition: box-shadow 0.15s ease;
@@ -331,6 +387,15 @@ td.row-actions { white-space: nowrap; display: flex; gap: 0.3rem; align-items: c
 @media (max-width: 640px) {
   .two-col { grid-template-columns: 1fr; }
   .ai-ask { flex-direction: column; }
+  /* Three tabs don't fit beside the brand on a phone — let the header wrap and
+     give the nav its own full-width row. */
+  .topbar { flex-wrap: wrap; gap: 0.5rem; padding: 0.7rem 1rem; }
+  .tabs { width: 100%; }
+  .tab { flex: 1; padding: 0.5rem 0.4rem; text-align: center; }
+  .tab-panel { padding: 0 1rem; }
+  /* The path input and its Save button stack rather than squeeze. */
+  .field .row { flex-wrap: wrap; }
+  .field .row > input[type="text"] { min-width: 0; }
 }
 
 /* Manual cookie entry — collapsed fallback under the browser-login button. */
@@ -343,3 +408,289 @@ td.row-actions { white-space: nowrap; display: flex; gap: 0.3rem; align-items: c
 .manual-cookies > summary::before { content: "\25B8 "; display: inline-block; transition: transform 0.15s ease; }
 .manual-cookies[open] > summary::before { transform: rotate(90deg); }
 .manual-cookies > summary:hover { color: var(--brand); }
+
+/* ------------------------------------------------------------------ */
+/* Workspace                                                          */
+/* ------------------------------------------------------------------ */
+.hint.err { color: var(--danger); }
+.status.ok { color: var(--ok); }
+.row.wrap { flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.pill.warn { background: var(--warn); color: #fff; }
+
+/* The over-cap decision box — deliberately loud, because analysis does not
+   start until the user picks one of its two options. */
+.ws-choice {
+  margin-top: 0.85rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+}
+.ws-choice .caveat { margin-top: 0; }
+.ws-choice select {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+}
+.ws-choice.flash { animation: wsFlash 1.2s ease-out; }
+@keyframes wsFlash {
+  0%, 100% { box-shadow: none; }
+  30% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 35%, transparent); }
+}
+
+/* Live audit trail of what the child actually read. */
+.ws-activity {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0.45rem 0.6rem;
+  max-height: 8.5rem;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+.ws-activity:empty { display: none; }
+.ws-activity li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.ws-file-list { margin: 0.5rem 0; font-size: 0.86rem; }
+.ws-file-list summary { cursor: pointer; font-weight: 600; }
+.ws-file-list dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.15rem 1rem;
+  margin: 0.5rem 0 0;
+}
+.ws-file-list dt {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+.ws-file-list dd { margin: 0; color: var(--muted); text-align: right; white-space: nowrap; }
+
+.ws-stored-list { list-style: none; margin: 0.5rem 0 0; padding: 0; font-size: 0.88rem; }
+.ws-stored-list li { padding: 0.15rem 0; }
+
+/* Multi-folder path entry: one text box per folder, up to MAX_PATHS. */
+.ws-path-row { margin-bottom: 0.4rem; }
+.ws-path-row:last-child { margin-bottom: 0; }
+.ws-path-row input.bad { border-color: var(--danger); }
+.ws-path-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.35rem;
+}
+.ws-path-actions .link { font-size: 0.84rem; padding: 0; }
+.ws-path-actions .muted { font-size: 0.78rem; }
+.ws-remove { padding: 0.45rem 0.7rem; }
+.ws-folder-head {
+  margin: 0.6rem 0 0.2rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.ws-folder-head code { font-size: 0.76rem; overflow-wrap: anywhere; }
+
+/* ------------------------------------------------------------------ */
+/* Workspace phases — 1 Case · 2 Working directory · 3 Fix            */
+/* ------------------------------------------------------------------ */
+/* The step number is explicit markup, not a CSS counter: phase 3's card
+   is re-rendered from JS, and a counter would renumber on every render. */
+.ws-step {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.5rem; height: 1.5rem; margin-right: 0.45rem;
+  border-radius: 50%; background: var(--brand); color: var(--brand-ink);
+  font-size: 0.8rem; font-weight: 700; vertical-align: 1px;
+}
+.ws-phase > h2 { display: flex; align-items: center; }
+
+/* Phase 1: candidate case list. One case gets bound, so these are radios. */
+.wsc-results { margin-top: 0.8rem; overflow-x: auto; }
+.wsc-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+.wsc-table td {
+  padding: 0.45rem 0.5rem; border-top: 1px solid var(--line); vertical-align: top;
+}
+.wsc-table tr { cursor: pointer; }
+.wsc-table tr:hover td { background: var(--accent); }
+.wsc-table td.chk { width: 1.6rem; }
+.wsc-table td.num { font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 600; }
+
+/* Phase 1: the bound case. */
+.ws-bound {
+  margin-top: 0.9rem; padding: 0.75rem 0.85rem;
+  border: 1px solid var(--line); border-left: 3px solid var(--brand);
+  border-radius: var(--radius); background: var(--accent);
+}
+.ws-bound-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
+/* Refresh + Unbind sit together, pushed to the right of the case header. */
+.ws-bound-actions { margin-left: auto; display: flex; gap: 0.4rem; flex-shrink: 0; }
+.ws-bound-actions button { padding: 0.25rem 0.6rem; font-size: 0.78rem; }
+.ws-bound-subject { margin: 0.4rem 0 0.2rem; font-weight: 600; }
+.ws-brief-detail { margin-top: 0.5rem; border-top: 1px solid var(--line); padding-top: 0.45rem; }
+.ws-brief-detail > summary {
+  cursor: pointer; font-size: 0.82rem; font-weight: 600; color: var(--muted);
+  list-style: none; user-select: none;
+}
+.ws-brief-detail > summary::-webkit-details-marker { display: none; }
+.ws-brief-detail > summary::before { content: "\25B8 "; display: inline-block; transition: transform 0.15s ease; }
+.ws-brief-detail[open] > summary::before { transform: rotate(90deg); }
+.ws-brief-detail > summary:hover { color: var(--brand); }
+.ws-brief-detail .desc { margin-top: 0.4rem; font-size: 0.86rem; white-space: normal; }
+
+/* Phase 3: readiness checklist. Each unmet item names its own remedy. */
+.ws-ready { list-style: none; margin: 0.7rem 0; padding: 0; font-size: 0.88rem; }
+.ws-ready li { padding: 0.3rem 0 0.3rem 1.5rem; position: relative; }
+.ws-ready li::before { position: absolute; left: 0; font-weight: 700; }
+.ws-ready li.ok::before { content: "\2713"; color: var(--ok); }
+.ws-ready li.miss::before { content: "\2022"; color: var(--muted); }
+.ws-ready li.miss { color: var(--muted); }
+/* A Windows path has no spaces to wrap on, so it must be allowed to break
+   mid-token or it pushes the whole page sideways on a phone. */
+.ws-ready code { font-size: 0.82rem; overflow-wrap: anywhere; }
+
+@media (max-width: 640px) {
+  .ws-bound-actions { margin-left: 0; width: 100%; }
+  .wsc-table { font-size: 0.8rem; }
+}
+
+/* Phase 3: the proposed fix, shown as before/after before anything is written. */
+.ws-fix-row { align-items: center; gap: 0.7rem; margin: 0.6rem 0 0.2rem; }
+
+.ws-plan-note { font-size: 0.88rem; margin: 0.45rem 0; }
+.ws-plan-note strong { color: var(--muted); font-weight: 600; }
+
+.ws-edit {
+  margin: 0.9rem 0; border: 1px solid var(--line); border-radius: var(--radius);
+  overflow: hidden;
+}
+.ws-edit.blocked { opacity: 0.72; border-style: dashed; }
+.ws-edit-head {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem;
+  padding: 0.5rem 0.7rem; background: var(--accent); border-bottom: 1px solid var(--line);
+  font-size: 0.86rem;
+}
+.ws-edit-n {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.25rem; height: 1.25rem; border-radius: 50%;
+  background: var(--muted); color: var(--card); font-size: 0.72rem; font-weight: 700;
+}
+.ws-edit-why { margin: 0.5rem 0.7rem; font-size: 0.86rem; }
+.ws-edit .caveat { margin: 0.5rem 0.7rem; }
+
+/* Before and after side by side on a wide screen, stacked on a narrow one. */
+.ws-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); }
+.ws-diff pre {
+  margin: 0; padding: 0.55rem 0.7rem; background: var(--card);
+  font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem; line-height: 1.45;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 22rem; overflow-y: auto;
+}
+.ws-diff-old { border-left: 3px solid var(--danger); }
+.ws-diff-new { border-left: 3px solid var(--ok); }
+
+.ws-apply-row { align-items: center; gap: 0.7rem; margin-top: 1rem; }
+.ws-file-applied { list-style: none; margin: 0.6rem 0; padding: 0; font-size: 0.88rem; }
+.ws-file-applied li { padding: 0.25rem 0; }
+
+@media (max-width: 640px) {
+  .ws-diff { grid-template-columns: 1fr; }
+  .ws-diff-new { border-left: 3px solid var(--ok); border-top: 1px solid var(--line); }
+}
+
+/* First line of the planning activity log: where the plan's context came from. */
+.ws-activity .ws-source { color: var(--brand); font-style: italic; }
+
+/* Which client ask each edit answers — the coverage view for the review. */
+.ws-requests {
+  margin: 0.9rem 0; padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--accent);
+}
+.ws-requests h3 { margin: 0 0 0.5rem; font-size: 0.86rem; }
+.ws-req-list { list-style: none; margin: 0; padding: 0; }
+.ws-req-list li {
+  display: grid; grid-template-columns: 1.6rem 1fr auto; gap: 0.5rem;
+  align-items: baseline; padding: 0.3rem 0; font-size: 0.86rem;
+  border-top: 1px solid var(--line);
+}
+.ws-req-list li:first-child { border-top: none; }
+.ws-req-id { font-weight: 700; color: var(--muted); }
+.ws-req-text { overflow-wrap: anywhere; }
+.ws-req-state { font-size: 0.76rem; white-space: nowrap; color: var(--muted); }
+.ws-req-list li.req-addressed .ws-req-state { color: var(--ok); font-weight: 600; }
+.ws-req-list li.req-partial .ws-req-state { color: var(--warn); font-weight: 600; }
+.ws-req-list li[class~="req-not-addressed"] .ws-req-state { color: var(--danger); font-weight: 600; }
+
+.ws-req-chip {
+  font-size: 0.72rem; padding: 0.1rem 0.45rem; border-radius: 999px;
+  background: var(--brand); color: var(--brand-ink); white-space: nowrap;
+}
+.ws-req-chip.none { background: transparent; color: var(--muted); border: 1px dashed var(--line); }
+
+@media (max-width: 640px) {
+  .ws-req-list li { grid-template-columns: 1.4rem 1fr; }
+  .ws-req-state { grid-column: 2; }
+}
+
+/* Case text rebuilt into readable structure (renderClientText). */
+.desc p, .tl-text p { margin: 0 0 0.45rem; }
+.desc p:last-child, .tl-text p:last-child { margin-bottom: 0; }
+.ct-list { margin: 0.3rem 0 0.5rem; padding-left: 1.5rem; }
+.ct-list li { margin: 0.3rem 0; padding-left: 0.15rem; }
+.ct-list li::marker { color: var(--brand); font-weight: 700; }
+
+/* Case attachments — a visual reference while reviewing a fix. */
+.ws-attach { margin-top: 0.6rem; border-top: 1px solid var(--line); padding-top: 0.5rem; }
+.ws-attach-head { font-size: 0.8rem; font-weight: 600; color: var(--muted); margin-bottom: 0.45rem; }
+.ws-attach-head .muted { font-weight: 400; }
+.ws-attach-grid { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.ws-attach-item {
+  margin: 0; width: 8.5rem; padding: 0.4rem;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--card);
+}
+.ws-attach-img {
+  width: 100%; height: 4.5rem; object-fit: contain;
+  cursor: zoom-in; background: var(--bg); border-radius: 4px;
+}
+.ws-attach-file {
+  display: flex; align-items: center; justify-content: center;
+  height: 4.5rem; background: var(--bg); border-radius: 4px;
+  font-size: 0.8rem; text-decoration: none;
+}
+.ws-attach-item figcaption { margin-top: 0.35rem; display: flex; flex-direction: column; gap: 0.1rem; }
+.ws-attach-item figcaption a {
+  font-size: 0.76rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ws-attach-item figcaption .muted { font-size: 0.7rem; }
+
+@media (max-width: 640px) {
+  .ws-attach-item { width: calc(50% - 0.3rem); }
+}
+
+/* Sub-points that arrived indented under a numbered ask. */
+.ct-sub { list-style: disc; margin: 0.25rem 0 0.1rem; padding-left: 1.1rem; }
+.ct-sub li { margin: 0.2rem 0; font-size: 0.97em; }
+.ct-list > li > p { margin: 0 0 0.25rem; }
+.ct-list > li > p:last-of-type { margin-bottom: 0; }
+
+/* "Save to folder" for an image attachment. */
+.ws-attach-save { font-size: 0.72rem; text-align: left; padding: 0; margin-top: 0.1rem; }
+.ws-attach-form { margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.3rem; }
+.ws-attach-form .wsa-name {
+  width: 100%; font-size: 0.74rem; padding: 0.25rem 0.35rem;
+  font-family: ui-monospace, Consolas, monospace;
+}
+.ws-attach-form .wsa-folder { width: 100%; font-size: 0.74rem; }
+.ws-attach-form .row { gap: 0.3rem; }
+.ws-attach-form button { padding: 0.2rem 0.5rem; font-size: 0.74rem; }
+.wsa-status { font-size: 0.7rem; }
+
+/* Status lines can carry a full Windows path, which has nothing to wrap on. */
+.status { overflow-wrap: anywhere; min-width: 0; }
+.actions { flex-wrap: wrap; }
+
+/* A stored plan is offered, not reopened, after a reload. */
+.ws-last-plan { margin-top: 0.5rem; }
+.ws-last-plan .link { font-size: inherit; }

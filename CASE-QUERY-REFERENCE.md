@@ -123,7 +123,7 @@ Useful fields: `Title, CreatedOn, Sender, Recepient` (note spelling),
 |--------|--------------------|
 | **`Activity.CaseId` is not queryable** | `$filter=CaseId eq …` returns HTTP 500. Link via `contains(Title,'SR…')` instead. |
 | **`$select` can silently 0 out results** | Including a non-existent field name makes the whole query return empty (and a helper that treats non-2xx as `[]` hides it). Query without `$select` first, inspect `Object.keys(row)`, then add a verified `$select`. |
-| **Author names DO NOT resolve** | `SocialMessage.CreatedById` / `Activity.AuthorId` are GUIDs. `SysAdminUnit.Name` comes back **undefined** over this OData access, and its `ContactId` path dead-ends. **Do not infer the author from @mentions in the message text — that is a guess and has been wrong.** The Creatio UI screenshot is the authoritative source for "who posted." Report author as *unresolved* unless confirmed visually. |
+| **Author names DO resolve — via `Contact`, not `SysAdminUnit`** | `SocialMessage.CreatedById` is a **`Contact` Id**. The old note here assumed it was a `SysAdminUnit` Id and concluded authors were unresolvable; that was wrong. `Contact?$filter=Id eq <CreatedById>&$select=Id,Name` returns the poster's name directly. Batch the whole feed into one OR-chained read (≤20 ids per request). Email senders: match `Activity.Sender`'s address against `Contact.Email`, falling back to the raw address. `SocialMessage` exposes **no** `Contact` navigation property, so `$expand=Contact` 400s — filter `Contact` separately. **Still never infer an author from an @mention in the body** — the mention names the person being addressed, not the poster. |
 | **Email bodies are messy HTML** | Full of Outlook VML junk (`v\:* {behavior:url(#default#VML);}` etc.) and quoted-reply history. Strip `<style>` blocks + tags, and cut at `From:` / `On … wrote:` / `Caution: This Message is From an External Sender` to isolate the new content. |
 | **Some emails have empty `Body`** | e.g. a client reply whose content lived only in quoted history/attachment — comes back blank. |
 | **`$TMPDIR` not set in this shell** | Write scratch scripts to the session scratchpad path, not `$TMPDIR`. |
@@ -161,4 +161,6 @@ const trimReply=t=>t.split(/From:\s|On .{5,40} wrote:|Caution: This Message is F
 3. `Activity?$filter=contains(Title,'<Number>')&$top=50` → emails.
 4. Tag each with `kind` (FEED/EMAIL), merge, sort by `CreatedOn`.
 5. `strip()` bodies; `trimReply()` emails.
-6. Leave author = GUID / "unresolved" unless confirmed from the Creatio UI.
+6. Resolve authors: batch the feed's `CreatedById` values against `Contact.Id`,
+   and email senders against `Contact.Email`. Leave an unmatched author blank
+   rather than guessing from an @mention.

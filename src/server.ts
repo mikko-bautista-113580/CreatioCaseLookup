@@ -29,6 +29,7 @@ import {
 } from "./creatioClient.js";
 import {
   findCases,
+  getAttachments,
   resolveOwner,
   resolveAccount,
   getCaseDetail,
@@ -45,6 +46,40 @@ import {
   type AnalyzableCase,
   type Preset,
 } from "./analyze.js";
+import {
+  applyPlan,
+  FixPlanError,
+  latestPlan,
+  planFix,
+  recheckPlan,
+} from "./fixPlan.js";
+import {
+  briefAgeHours,
+  buildBrief,
+  CaseNumberError,
+  getBoundCase,
+  loadBrief,
+  saveBrief,
+  setBoundCase,
+  validateCaseNumber,
+} from "./caseBrief.js";
+import {
+  enumerateWorkspaces,
+  fileCap,
+  getWorkspacePaths,
+  indexEntryFor,
+  isStale,
+  loadAnalysisFor,
+  MAX_PATHS,
+  saveAssetToWorkspace,
+  setWorkspacePaths,
+  validateWorkspacePath,
+  WorkspacePathError,
+  WorkspaceWriteError,
+  type AnalysisMode,
+  type MultiEnumResult,
+} from "./workspace.js";
+import { analyzeWorkspace } from "./analyzeWorkspace.js";
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "public");
 const PORT = parseInt(process.env.CREATIO_APP_PORT || "3000", 10);
@@ -134,6 +169,9 @@ async function handleApi(
       statuses: STATUS_NAMES,
       openActive: OPEN_ACTIVE,
       aiAvailable: claudeAvailable(),
+      workspacePaths: getWorkspacePaths(),
+      workspaceCap: fileCap(),
+      workspaceCase: getBoundCase(),
     });
     return;
   }
@@ -259,6 +297,341 @@ async function handleApi(
   // AI analysis of a set of cases — streams the model output via SSE.
   if (req.method === "POST" && path === "/api/analyze") {
     await handleAnalyze(req, res);
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // Workspace: the working directory the user is analyzing.
+  // -------------------------------------------------------------------------
+
+  // Current workspace config + what's already stored for it.
+  if (req.method === "GET" && path === "/api/workspace") {
+    const raw = getWorkspacePaths();
+    const body: Record<string, unknown> = {
+      paths: raw,
+      valid: false,
+      maxPaths: MAX_PATHS,
+      cap: fileCap(),
+      aiAvailable: claudeAvailable(),
+      analysis: { directory: null, files: [] },
+    };
+    if (raw.length) {
+      try {
+        const abs = raw.map(validateWorkspacePath);
+        body.paths = abs;
+        body.valid = true;
+        const entry = indexEntryFor(abs);
+        if (entry) body.analysis = { directory: entry.directory, files: entry.files };
+        // Flag a stored report that predates the files it describes.
+        const stored = loadAnalysisFor(abs, "directory");
+        if (stored) {
+          try {
+            body.stale = isStale(stored.meta, enumerateWorkspaces(abs));
+          } catch {
+            /* enumeration problems surface on /files */
+          }
+        }
+      } catch (e) {
+        body.error = e instanceof Error ? e.message : String(e);
+      }
+    }
+    sendJson(res, 200, body);
+    return;
+  }
+
+  // Save the workspace folders to .env (takes effect immediately — read live).
+  // Each path is validated individually so the UI can point at the bad one.
+  if (req.method === "POST" && path === "/api/workspace") {
+    try {
+      const requestBody = await readBody(req);
+      const incoming: string[] = Array.isArray(requestBody.paths)
+        ? requestBody.paths
+        : typeof requestBody.path === "string"
+          ? [requestBody.path]
+          : [];
+      const trimmed = incoming
+        .map((p) => (typeof p === "string" ? p.trim() : ""))
+        .filter(Boolean)
+        .slice(0, MAX_PATHS);
+
+      // Clearing is explicit rather than "save nothing", so an empty form can
+      // still be rejected as a mistake. Stored analyses are left on disk: they
+      // are keyed by folder, so re-entering the same path brings its report
+      // back instead of costing another run.
+      if (requestBody.clear === true) {
+        setWorkspacePaths([]);
+        sendJson(res, 200, { saved: true, cleared: true, paths: [], enumeration: null });
+        return;
+      }
+
+      if (!trimmed.length) {
+        sendJson(res, 400, { error: "path", message: "Enter the folder you're working in." });
+        return;
+      }
+
+      const abs: string[] = [];
+      for (let i = 0; i < trimmed.length; i++) {
+        try {
+          const one = validateWorkspacePath(trimmed[i]);
+          // Silently collapse a folder listed twice rather than double-counting
+          // its files against the cap.
+          if (!abs.some((p) => p.toLowerCase() === one.toLowerCase())) abs.push(one);
+        } catch (e) {
+          if (e instanceof WorkspacePathError) {
+            // `index` lets the UI mark the offending box instead of the first one.
+            sendJson(res, 400, { error: "path", index: i, message: e.message });
+            return;
+          }
+          throw e;
+        }
+      }
+
+      setWorkspacePaths(abs);
+      sendJson(res, 200, { saved: true, paths: abs, enumeration: enumerateWorkspaces(abs) });
+    } catch (e) {
+      sendError(res, e);
+    }
+    return;
+  }
+
+  // Census of the top-level source files — drives the count and the over-cap choice.
+  if (req.method === "GET" && path === "/api/workspace/files") {
+    try {
+      const qp = url.searchParams.getAll("path");
+      const abs = (qp.length ? qp : getWorkspacePaths()).map(validateWorkspacePath);
+      if (!abs.length) {
+        sendJson(res, 400, { error: "path", message: "No workspace folder configured." });
+        return;
+      }
+      sendJson(res, 200, enumerateWorkspaces(abs));
+    } catch (e) {
+      if (e instanceof WorkspacePathError) {
+        sendJson(res, 400, { error: "path", message: e.message });
+        return;
+      }
+      sendError(res, e);
+    }
+    return;
+  }
+
+  // Read back a stored analysis.
+  if (req.method === "GET" && path === "/api/workspace/analysis") {
+    try {
+      const qp = url.searchParams.getAll("path");
+      const abs = (qp.length ? qp : getWorkspacePaths()).map(validateWorkspacePath);
+      const mode = (url.searchParams.get("mode") || "directory") as AnalysisMode;
+      const file = url.searchParams.get("file") || undefined;
+      const loaded = loadAnalysisFor(abs, mode === "file" ? "file" : "directory", file);
+      if (!loaded) {
+        sendJson(res, 404, { error: "not_found", message: "No stored analysis for that folder." });
+        return;
+      }
+      sendJson(res, 200, { meta: loaded.meta, markdown: loaded.body });
+    } catch (e) {
+      if (e instanceof WorkspacePathError) {
+        sendJson(res, 400, { error: "path", message: e.message });
+        return;
+      }
+      sendError(res, e);
+    }
+    return;
+  }
+
+  // Read-only analysis of the workspace — streams the report via SSE.
+  if (req.method === "POST" && path === "/api/workspace/analyze") {
+    await handleWorkspaceAnalyze(req, res);
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // The bound case — phase 1 of the Workspace tab.
+  //
+  // The binding lives in .env and the fetched brief in .analysis/cases/, so it
+  // survives a browser reload and is readable by the creatio-case-fix skill in
+  // a fresh Claude Code session. The server itself stays stateless.
+  // -------------------------------------------------------------------------
+
+  if (req.method === "GET" && path === "/api/workspace/case") {
+    const number = getBoundCase();
+    const brief = number ? loadBrief(number) : null;
+    sendJson(res, 200, {
+      number,
+      brief,
+      ageHours: brief ? Math.round(briefAgeHours(brief) * 10) / 10 : null,
+    });
+    return;
+  }
+
+  // Bind a case (or clear the binding with an empty number).
+  //
+  // The case is re-fetched from Creatio by number rather than trusting the row
+  // the browser posted: the brief is the artifact the fix skill acts on, so it
+  // has to come from the source.
+  if (req.method === "POST" && path === "/api/workspace/case") {
+    try {
+      const requestBody = await readBody(req);
+      const raw = typeof requestBody.number === "string" ? requestBody.number.trim() : "";
+
+      if (!raw) {
+        setBoundCase("");
+        sendJson(res, 200, { saved: true, number: "", brief: null, ageHours: null });
+        return;
+      }
+
+      const number = validateCaseNumber(raw);
+      const found = await findCases({ mode: "number", numbers: [number] });
+      const row = found.cases[0];
+      if (!row) {
+        sendJson(res, 404, {
+          error: "not_found",
+          message: `No case with number ${number}. Check the number, or search by owner instead.`,
+        });
+        return;
+      }
+
+      const detail = await getCaseDetail(row, ["description", "timeline"]);
+
+      // Attachments need CaseFile in the entity allowlist. A missing entry must
+      // not fail the bind — the brief records it as a caveat instead.
+      let attachments: Awaited<ReturnType<typeof getAttachments>> | null = null;
+      try {
+        attachments = await getAttachments(row.Id);
+      } catch (e) {
+        if (e instanceof AuthError) throw e;
+      }
+
+      const brief = buildBrief(row, detail, attachments);
+      saveBrief(brief);
+      setBoundCase(brief.number);
+
+      sendJson(res, 200, { saved: true, number: brief.number, brief, ageHours: 0 });
+    } catch (e) {
+      if (e instanceof CaseNumberError) {
+        sendJson(res, 400, { error: "case", message: e.message });
+        return;
+      }
+      sendError(res, e);
+    }
+    return;
+  }
+
+  // Save a case attachment (an image — e.g. the school's logo) into one of the
+  // configured workspace folders, so the template can actually use it.
+  //
+  // This writes outside the repo, so every rule lives in workspace.ts: images
+  // only, the folder must be one that's configured, the client-supplied name is
+  // reduced to a safe basename, and replacing an existing file needs an
+  // explicit confirm and backs the original up first.
+  if (req.method === "POST" && path === "/api/workspace/attachment") {
+    try {
+      const requestBody = await readBody(req);
+      const id = typeof requestBody.id === "string" ? requestBody.id : "";
+      if (!/^[0-9a-fA-F-]{36}$/.test(id)) {
+        sendJson(res, 400, { error: "server", message: "Invalid attachment id." });
+        return;
+      }
+
+      const allowed = getWorkspacePaths().map(validateWorkspacePath);
+      if (!allowed.length) {
+        sendJson(res, 400, {
+          error: "path",
+          message: "No workspace folder is configured — set one in phase 2 first.",
+        });
+        return;
+      }
+
+      const file = await downloadFile("CaseFile", id);
+      const saved = saveAssetToWorkspace(
+        typeof requestBody.folder === "string" && requestBody.folder ? requestBody.folder : allowed[0],
+        typeof requestBody.name === "string" && requestBody.name ? requestBody.name : file.filename || "",
+        file.buffer,
+        { overwrite: requestBody.overwrite === true, allowed }
+      );
+
+      sendJson(res, 200, {
+        saved: true,
+        name: saved.name,
+        path: saved.path,
+        bytes: file.buffer.length,
+        overwrote: saved.overwrote,
+        backup: saved.backup || null,
+      });
+    } catch (e) {
+      if (e instanceof WorkspaceWriteError) {
+        // `code` lets the UI offer a replace instead of just reporting a wall.
+        sendJson(res, 400, { error: "asset", code: e.code, message: e.message });
+        return;
+      }
+      if (e instanceof WorkspacePathError) {
+        sendJson(res, 400, { error: "path", message: e.message });
+        return;
+      }
+      sendError(res, e);
+    }
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // Phase 3: plan a fix, then apply it on approval.
+  //
+  // The planning run has NO write tools; applying is done by plain Node in
+  // fixPlan.ts after the user approves and every match is re-verified. See that
+  // module's header for why the split is the security model.
+  // -------------------------------------------------------------------------
+
+  // The last plan for the bound case, so a browser reload doesn't lose it.
+  if (req.method === "GET" && path === "/api/workspace/fix") {
+    const number = getBoundCase();
+    let plan = number ? latestPlan(number) : null;
+    // Re-check against the files as they are now — a plan read back later is a
+    // claim about the past, and the review screen must show current reality.
+    if (plan) {
+      try {
+        const abs = getWorkspacePaths().map(validateWorkspacePath);
+        if (abs.length) plan = recheckPlan(plan, enumerateWorkspaces(abs), abs);
+      } catch {
+        /* unreadable workspace — hand back the stored plan as-is */
+      }
+    }
+    sendJson(res, 200, { plan });
+    return;
+  }
+
+  if (req.method === "POST" && path === "/api/workspace/fix/plan") {
+    await handleFixPlan(req, res);
+    return;
+  }
+
+  // Apply takes only a plan ID — never the edits themselves. The server re-reads
+  // the plan it wrote, so the browser can't ask for an arbitrary file write.
+  if (req.method === "POST" && path === "/api/workspace/fix/apply") {
+    try {
+      const requestBody = await readBody(req);
+      const id = typeof requestBody.id === "string" ? requestBody.id : "";
+      if (!id) {
+        sendJson(res, 400, { error: "server", message: "No plan id given." });
+        return;
+      }
+      const abs = getWorkspacePaths().map(validateWorkspacePath);
+      if (!abs.length) {
+        sendJson(res, 400, { error: "path", message: "No workspace folder configured." });
+        return;
+      }
+      const result = applyPlan(id, enumerateWorkspaces(abs), abs, {
+        reapply: requestBody.reapply === true,
+      });
+      sendJson(res, 200, { applied: result.applied, backupDir: result.backupDir });
+    } catch (e) {
+      if (e instanceof FixPlanError) {
+        sendJson(res, 400, { error: "fix", message: e.message });
+        return;
+      }
+      if (e instanceof WorkspacePathError) {
+        sendJson(res, 400, { error: "path", message: e.message });
+        return;
+      }
+      sendError(res, e);
+    }
     return;
   }
 
@@ -468,6 +841,311 @@ async function handleAnalyze(req: IncomingMessage, res: ServerResponse): Promise
   );
 
   req.on("close", () => runner.kill());
+}
+
+/**
+ * Read-only analysis of the workspace directory (Server-Sent Events).
+ *
+ * Every validation happens BEFORE writeHead, so a bad request gets a real JSON
+ * error the UI can render rather than an error buried inside an open stream.
+ *
+ * The file cap is enforced HERE as well as in the UI — the browser's decision is
+ * not trusted, so a direct API call can't kick off a huge run either.
+ */
+async function handleWorkspaceAnalyze(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: any;
+  try {
+    body = await readBody(req);
+  } catch (e) {
+    return sendError(res, e);
+  }
+
+  if (!claudeAvailable()) {
+    return sendJson(res, 400, {
+      error: "server",
+      message:
+        "The Claude CLI was not found. Install it (npm i -g @anthropic-ai/claude-code), run `claude` once to log in, then restart the app.",
+    });
+  }
+
+  let abs: string[];
+  let en: MultiEnumResult;
+  try {
+    const incoming: string[] = Array.isArray(body.paths)
+      ? body.paths
+      : typeof body.path === "string" && body.path
+        ? [body.path]
+        : getWorkspacePaths();
+    abs = incoming
+      .map((p) => (typeof p === "string" ? p.trim() : ""))
+      .filter(Boolean)
+      .slice(0, MAX_PATHS)
+      .map(validateWorkspacePath);
+    if (!abs.length) {
+      return sendJson(res, 400, { error: "path", message: "No workspace folder configured." });
+    }
+    en = enumerateWorkspaces(abs);
+  } catch (e) {
+    if (e instanceof WorkspacePathError) {
+      return sendJson(res, 400, { error: "path", message: e.message });
+    }
+    return sendError(res, e);
+  }
+
+  const mode: AnalysisMode = body.mode === "file" ? "file" : "directory";
+  let target: string | undefined;
+  let targetFolder: string | undefined;
+
+  if (mode === "file") {
+    // Exact match against the enumeration — never join a raw name onto a path.
+    // This is also what disposes of any "../" concern.
+    target = typeof body.file === "string" ? body.file : "";
+    targetFolder = typeof body.folder === "string" ? body.folder : undefined;
+    const hit = en.files.find(
+      (f) => f.name === target && (!targetFolder || f.folder === targetFolder)
+    );
+    if (!target || !hit) {
+      return sendJson(res, 400, {
+        error: "server",
+        message: `"${target || ""}" is not one of the top-level source files in the workspace.`,
+        files: en.files,
+      });
+    }
+    targetFolder = hit.folder;
+  } else {
+    if (en.count === 0) {
+      return sendJson(res, 400, {
+        error: "server",
+        message: "No top-level source or text files found in that folder.",
+      });
+    }
+    if (en.overCap && !body.force) {
+      return sendJson(res, 400, {
+        error: "over_cap",
+        message:
+          `That folder has ${en.count} top-level files — more than the ${en.cap}-file quick-analysis limit. ` +
+          "Choose to analyze all of them anyway, or pick a single file.",
+        count: en.count,
+        cap: en.cap,
+        files: en.files,
+      });
+    }
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  sse(res, "start", {
+    paths: abs,
+    mode,
+    target: target || null,
+    targetFolder: targetFolder || null,
+    count: mode === "file" ? 1 : en.count,
+    cap: en.cap,
+    overCap: en.overCap,
+    skipped: en.skipped,
+  });
+
+  // A tool-using run can sit silent for a minute while the model reads files.
+  // A bare SSE comment keeps proxies and the fetch reader alive; the client's
+  // consumeSse finds no `data:` in the block and skips it.
+  const heartbeat = setInterval(() => {
+    res.write(": ping\n\n");
+  }, 15_000);
+
+  const controller = new AbortController();
+  let closed = false;
+
+  const runner = analyzeWorkspace(
+    {
+      paths: abs,
+      mode,
+      target,
+      targetFolder,
+      enumeration: en,
+      proceededOverCap: mode === "directory" && en.overCap && Boolean(body.force),
+      signal: controller.signal,
+    },
+    {
+      onChunk: (text) => sse(res, "chunk", { text }),
+      onToolUse: (t) => sse(res, "tool", { name: t.name, target: t.target }),
+      onDone: ({ meta, stored, costUsd, totalTokens, durationMs }) => {
+        clearInterval(heartbeat);
+        sse(res, "done", {
+          costUsd,
+          totalTokens,
+          durationMs,
+          saved: Boolean(stored),
+          report: stored?.report || null,
+          truncated: meta.truncated,
+          filesAnalyzed: meta.filesAnalyzed.length,
+          toolCalls: meta.toolCalls.length,
+        });
+        res.end();
+      },
+      onError: (err, partial) => {
+        clearInterval(heartbeat);
+        sse(res, "error", {
+          kind: err.kind,
+          message: err.message,
+          saved: Boolean(partial?.stored),
+          report: partial?.stored?.report || null,
+        });
+        res.end();
+      },
+    }
+  );
+
+  req.on("close", () => {
+    if (closed) return;
+    closed = true;
+    clearInterval(heartbeat);
+    controller.abort();
+    runner.kill();
+  });
+}
+
+/**
+ * Plan a fix for the bound case (Server-Sent Events).
+ *
+ * Read-only: the child gets Read/Glob/Grep and nothing else, so this route
+ * cannot modify a file no matter what the case text says. It streams the
+ * explanation, then a `done` event carrying the structured plan for review.
+ *
+ * All validation happens before writeHead, so a missing case or folder is a
+ * real JSON error rather than one buried inside an open stream.
+ */
+async function handleFixPlan(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    await readBody(req);
+  } catch (e) {
+    return sendError(res, e);
+  }
+
+  if (!claudeAvailable()) {
+    return sendJson(res, 400, {
+      error: "server",
+      message:
+        "The Claude CLI was not found. Install it (npm i -g @anthropic-ai/claude-code), run `claude` once to log in, then restart the app.",
+    });
+  }
+
+  const number = getBoundCase();
+  if (!number) {
+    return sendJson(res, 400, {
+      error: "server",
+      message: "No case is bound. Pick one in phase 1 first.",
+    });
+  }
+  const brief = loadBrief(number);
+  if (!brief) {
+    return sendJson(res, 400, {
+      error: "server",
+      message: `${number} is bound but nothing is stored for it. Search for it in phase 1 and pick it again to fetch the details.`,
+    });
+  }
+
+  let abs: string[];
+  let en: MultiEnumResult;
+  try {
+    abs = getWorkspacePaths().map(validateWorkspacePath);
+    if (!abs.length) {
+      return sendJson(res, 400, { error: "path", message: "No workspace folder configured." });
+    }
+    en = enumerateWorkspaces(abs);
+  } catch (e) {
+    if (e instanceof WorkspacePathError) {
+      return sendJson(res, 400, { error: "path", message: e.message });
+    }
+    return sendError(res, e);
+  }
+
+  if (!en.count) {
+    return sendJson(res, 400, {
+      error: "server",
+      message: "No top-level source files in the workspace, so there is nothing to fix.",
+    });
+  }
+
+  // The stored workspace analysis is the planner's map: it says what each file
+  // is for, so the run spends its budget reading the right files rather than
+  // rediscovering the layout. Staleness is passed through so it can be weighed
+  // rather than silently trusted.
+  const stored = loadAnalysisFor(abs, "directory");
+  let analysisStale = false;
+  if (stored) {
+    try {
+      analysisStale = isStale(stored.meta, en);
+    } catch {
+      /* enumeration already succeeded above; treat as current */
+    }
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  sse(res, "start", {
+    caseNumber: brief.number,
+    caseSubject: brief.subject,
+    paths: abs,
+    files: en.count,
+    hasAnalysis: Boolean(stored),
+    analysisGenerated: stored?.meta.finishedAt || null,
+    analysisStale,
+    analysisFiles: stored?.meta.filesAnalyzed.length || 0,
+  });
+
+  const heartbeat = setInterval(() => {
+    res.write(": ping\n\n");
+  }, 15_000);
+
+  const controller = new AbortController();
+  let closed = false;
+
+  const runner = planFix(
+    {
+      paths: abs,
+      enumeration: en,
+      brief,
+      analysisMarkdown: stored?.body,
+      analysisGenerated: stored?.meta.finishedAt,
+      analysisStale,
+      signal: controller.signal,
+    },
+    {
+      onChunk: (text) => sse(res, "chunk", { text }),
+      onToolUse: (t) => sse(res, "tool", { name: t.name, target: t.target }),
+      onDone: ({ plan, planError, costUsd, totalTokens, durationMs }) => {
+        clearInterval(heartbeat);
+        sse(res, "done", { plan, planError: planError || null, costUsd, totalTokens, durationMs });
+        res.end();
+      },
+      onError: (err, _partial, salvaged) => {
+        clearInterval(heartbeat);
+        // A timed-out or stopped run that already emitted its plan still has
+        // something reviewable; flag it as incomplete rather than discarding it.
+        sse(res, "error", {
+          kind: err.kind,
+          message: err.message,
+          plan: salvaged,
+          incomplete: Boolean(salvaged),
+        });
+        res.end();
+      },
+    }
+  );
+
+  req.on("close", () => {
+    if (closed) return;
+    closed = true;
+    clearInterval(heartbeat);
+    controller.abort();
+    runner.kill();
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@
       </div>
       <nav class="tabs">
         <button class="tab active" data-tab="lookup">Lookup</button>
+        <button class="tab" data-tab="workspace">Workspace</button>
         <button class="tab" data-tab="settings">Settings</button>
       </nav>
     </header>
@@ -80,6 +81,107 @@
       </section>
 
       <section id="results" class="results"></section>
+    </main>
+
+    <!-- ============================ WORKSPACE ============================ -->
+    <!-- Three phases, softly ordered: pick the case, point at the folders,
+         then hand off to Claude Code for the fix. Each phase works on its own;
+         phase 3 just stays disabled until the first two are done. -->
+    <main id="tab-workspace" class="tab-panel">
+      <section class="card ws-phase" id="wsCaseCard">
+        <h2><span class="ws-step">1</span> Case</h2>
+        <p class="hint">
+          The case you're working on. Same search as the Lookup tab — find it, then
+          pick one. Its description and conversation are saved locally so the
+          <code>creatio-case-fix</code> skill starts with them in hand.
+        </p>
+
+        <div class="field">
+          <label>Find cases by</label>
+          <div class="segmented" id="wscMode">
+            <button data-mode="number" class="active">Case number</button>
+            <button data-mode="owner">Assignee / owner</button>
+            <button data-mode="account">Account / school</button>
+            <button data-mode="recent">All recent</button>
+          </div>
+        </div>
+
+        <div class="field" id="wscValueField">
+          <label id="wscValueLabel" for="wscValue">Case number</label>
+          <div class="row">
+            <input id="wscValue" type="text" placeholder="SR00031980" autocomplete="off" />
+            <button id="wscFind" class="secondary hidden">Find</button>
+            <button id="wscSearch" class="primary">Search</button>
+          </div>
+          <div id="wscCandidates" class="candidates hidden"></div>
+          <p class="hint" id="wscHint">Enter the case number, then Search.</p>
+        </div>
+
+        <div class="field hidden" id="wscStatusField">
+          <label>Status</label>
+          <div class="chips" id="wscStatus"></div>
+        </div>
+
+        <!-- Search hits: one selectable case (this phase binds exactly one). -->
+        <div id="wscResults" class="wsc-results hidden"></div>
+
+        <!-- The bound case + its stored brief. -->
+        <div id="wsCaseBrief" class="hidden"></div>
+      </section>
+
+      <section class="card ws-phase">
+        <h2><span class="ws-step">2</span> Working directory</h2>
+        <p class="hint">
+          The folder you're working in — add up to <strong>3</strong>, and they're
+          analyzed together as one workspace (useful when a fix spans a template and
+          the includes it pulls in). Saved to the app's <code>.env</code>, effective
+          immediately with no restart. Analysis is <strong>read-only</strong>: Claude
+          may read, glob and grep these folders, and can neither edit files nor run
+          commands.
+        </p>
+
+        <div class="field">
+          <label for="wsPath0">Absolute path</label>
+          <!-- Rows 2 and 3 are added by "+ Add another folder"; all three are
+               saved together and analyzed as one workspace. -->
+          <div id="wsPathRows"></div>
+          <div class="ws-path-actions">
+            <button id="wsAddPathBtn" class="link">+ Add another folder</button>
+            <span class="muted" id="wsPathCount"></span>
+          </div>
+          <p class="hint" id="wsPathHint">
+            Type the full path of the folder you're working in, then Save.
+          </p>
+        </div>
+
+        <div class="actions">
+          <button id="wsSaveBtn" class="primary">Save</button>
+          <button id="wsAnalyzeBtn" class="primary">Analyze</button>
+          <button id="wsRescanBtn" class="secondary">Re-scan files</button>
+          <button id="wsClearBtn" class="secondary">Clear</button>
+          <span id="wsStatus" class="status"></span>
+        </div>
+      </section>
+
+      <!-- File census + the over-cap choice -->
+      <section id="wsFiles" class="card hidden"></section>
+
+      <!-- Live streaming analysis -->
+      <section id="wsPanel" class="card analysis hidden"></section>
+
+      <!-- Last saved report for this path -->
+      <section id="wsStored" class="card hidden"></section>
+
+      <!-- Phase 3 is a HANDOFF, not a second engine. The app never edits files:
+           it hands Claude Code the case and the folders, and the skill does the
+           work behind its own approval gate. Rendered by renderHandoff(). -->
+      <section class="card ws-phase" id="wsHandoff"></section>
+
+      <!-- Live streaming of the read-only planning run. -->
+      <section id="wsFixPanel" class="card analysis hidden"></section>
+
+      <!-- The proposed plan: before/after per file, then Apply or Discard. -->
+      <section id="wsFixPlan" class="card hidden"></section>
     </main>
 
     <!-- ============================ SETTINGS ============================ -->

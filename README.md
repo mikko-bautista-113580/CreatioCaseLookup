@@ -18,6 +18,8 @@ Everything is read-only by construction: the HTTP layer only ever issues `GET`, 
 - 🖥️ **Local web app** — look up cases by owner, case number, account, or "all recent"; filter by status; choose detail depth.
 - 🧵 **Rich case detail** — HTML-stripped descriptions, merged **feed + email timeline**, and **inline screenshots/attachments** proxied from Creatio's FileService.
 - ✨ **AI analysis (optional)** — Summarize & prioritize, Common themes, Next actions, or free-text Q&A over the loaded cases; streamed live via the local Claude CLI (uses your existing Claude login — no API key).
+- 📂 **Workspace analysis** — point the app at up to **3 folders** you're working in and get a **read-only** code analysis of them together, capped at 10 top-level files so it stays fast. Reports are stored under `.analysis/` and reused by the bundled skills.
+- 🧩 **Case → code → fix** — the Workspace tab runs in three phases: pick the **case**, point at the **folders**, then **Plan the fix**. You get every change as a before/after diff; nothing is written until you press Apply, and applied edits are left **uncommitted** for review.
 - ⚙️ **In-app settings** — paste/refresh SSO cookies, base URL, allowlist, row cap; no VS Code required.
 - 📡 **Live progress** — the search streams per-case progress with a percentage bar.
 
@@ -27,11 +29,20 @@ Everything is read-only by construction: the HTTP layer only ever issues `GET`, 
 src/
   creatioClient.ts   Shared read-only OData client (auth, cookies, GET, file download)
   caseLookup.ts      Case-lookup query recipes (search, description, timeline, attachments)
-  analyze.ts         Claude CLI runner for AI analysis (streaming, isolated, no tools/MCP)
+  shared/
+    claudeRun.ts     Generic Claude CLI runner (spawn, NDJSON stream, tool clamping)
+  analyze.ts         Case AI analysis prompts (isolated run: no tools, no MCP)
+  workspace.ts       Workspace path validation, file enumeration, .analysis/ store
+  caseBrief.ts       Bound case + stored case brief (.analysis/cases/)
+  fixPlan.ts         Fix planning (read-only) + reviewed apply (plain Node)
+  analyzeWorkspace.ts Read-only workspace analysis (Read/Glob/Grep only)
+  workspaceCli.ts    CLI over the workspace store, used by the skills
   server.ts          Local web app: static hosting + JSON/SSE API
   index.ts           MCP server (thin surface over creatioClient)
   test-auth.ts       Standalone credential check
 public/              Web app UI (vanilla HTML/CSS/JS, zero runtime deps)
+.claude/skills/      creatio-case-lookup, workspace-analysis, creatio-case-fix
+.analysis/           Stored workspace analyses + case briefs (git-ignored local state)
 start-app.bat        One-click launcher for the web app (Windows)
 .env.example         Copy to .env and fill in
 ```
@@ -78,11 +89,16 @@ All settings live in `.env` — the MCP server loads it from the project root it
 | `CREATIO_BASE_URL` | Your Creatio URL, e.g. `https://<your-tenant>.creatio.com` |
 | `CREATIO_LOGIN` / `CREATIO_PASSWORD` | Forms-auth service account (Mode 1) |
 | `CREATIO_ASPXAUTH` / `CREATIO_BPMCSRF` / `CREATIO_BPMLOADER` | SSO session cookies (Mode 2) |
-| `CREATIO_ALLOWED_ENTITIES` | Comma-separated entity allowlist (e.g. `Case,Activity,Contact,Account,SocialMessage`) |
+| `CREATIO_ALLOWED_ENTITIES` | Comma-separated entity allowlist (e.g. `Case,Activity,Contact,Account,SocialMessage,CaseFile`). `CaseFile` is metadata-only and enables the attachment list in the Workspace tab |
 | `CREATIO_MAX_TOP` | Max rows per query (default 50) |
 | `CREATIO_APP_PORT` | Web app port (default 3000) |
 | `CREATIO_APP_NO_OPEN` | Set `1` to stop the app auto-opening the browser |
 | `CREATIO_APP_MODEL` | Model for AI analysis; default `claude-opus-5`. Set `claude-sonnet-5` or `claude-haiku-4-5` for cheaper/faster runs |
+| `CREATIO_WORKSPACE_PATH` / `_2` / `_3` | The 1-3 folders the Workspace tab analyzes together (normally set from the UI) |
+| `CREATIO_WORKSPACE_FILE_CAP` | Total top-level file count (all folders) above which the app asks before analyzing (default 10) |
+| `CREATIO_WORKSPACE_TIMEOUT_MS` | Hard timeout for one workspace analysis (default 300000) |
+| `CREATIO_WORKSPACE_CASE` | The case bound in the Workspace tab's phase 1 (normally set from the UI) |
+| `CREATIO_FIX_TIMEOUT_MS` | Hard timeout for one fix-planning run (default 420000) |
 
 ### Authentication
 
@@ -99,9 +115,10 @@ Verify either mode with `npm run test-auth`.
 
 - **Lookup tab** — choose *who* (assignee / case number / account / all recent), *which statuses*, and *how much detail* (summary, full description, timeline, latest update, extra fields), then **Search**. Results stream in with a progress bar.
 - **Attachments** — screenshots embedded in descriptions and feed posts render **inline** (click to enlarge); email attachments appear as thumbnails. Images are streamed through a read-only `/api/file` proxy restricted to file entities + GUID ids.
+- **Workspace tab** — three phases: **1** pick the case you're working on, **2** point at the folder(s) and run a read-only analysis, **3** plan a fix, review every edit as a diff, and apply it (see below).
 - **Settings tab** — base URL, cookies, allowlist, row cap, plus **Test connection**.
 
-The server binds to `127.0.0.1` only and the only file it ever writes is your local `.env`.
+The server binds to `127.0.0.1` only. Inside this repo it writes your local `.env` (Settings, Workspace path, bound case) and `.analysis/` (workspace reports, case briefs, fix plans and pre-edit backups). The only time it writes **outside** this repo is when you press **Apply** on a fix plan you have reviewed — never during an analysis, and never without that approval.
 
 ### AI analysis
 
@@ -109,6 +126,63 @@ With the **Claude CLI** installed and logged in, the results view shows an **"An
 
 - Enable: `npm i -g @anthropic-ai/claude-code`, then run `claude` once to sign in. Uses **your Claude subscription — no API key**.
 - Runs `claude -p` locally, **isolated** (no tools, no MCP, empty temp cwd); only the selected cases' **text** is sent — never your cookies. Defaults to **Claude Opus 5** (`claude-opus-5`); set `CREATIO_APP_MODEL=claude-sonnet-5` (or `claude-haiku-4-5`) for cheaper/faster runs.
+
+### Workspace analysis
+
+The **Workspace tab** takes the absolute path of the folder you're working in — plus up to two more via **+ Add another folder** — saves them to `.env` (effective immediately, no restart), and runs a **read-only** analysis.
+
+- **Several folders, one report.** The folders are analyzed together as a single workspace, which is what you want when a fix spans a report template and the shared includes it pulls in. The first folder is the analyzer's working directory; the others are granted explicitly with `--add-dir`. Adding or removing a folder makes it a different workspace with its own stored report.
+
+- **Read-only by construction.** The child process is spawned with `--tools Read,Glob,Grep`, which removes `Edit`, `Write` and `Bash` from its tool *schema* — not merely from its permissions. Deny rules additionally block `.env`, `*.pem`, `*.key` and SSH keys, so an analysis of this repo cannot read your Creatio cookies. Every tool call is recorded in the report's sidecar, so you can see exactly which files were touched.
+- **Capped at 10 top-level files in total** so a run stays fast. Only files directly in each folder count — no recursion — and the cap applies to the sum across folders. Above the cap the app **does not start**: it tells you the run will take longer and offers "analyze all N anyway" or a single-file pick. The API enforces the same rule, so a stray request can't kick off a huge run either.
+- **Excluded automatically:** secret-bearing files (`.env`, keys, certs — counted but never listed), files over 512 KB, non-text files, and the usual build/dependency directories.
+- **Stored** as `.analysis/<slug>/analysis.md` plus a JSON sidecar (files analyzed, tool calls, model, cost, `truncated` flag), indexed in `.analysis/index.json`. The folder is **git-ignored local state** — safe to delete.
+
+> **Accepted limitation:** because the analysis child runs *in* your folder, that folder's own `CLAUDE.md` is loaded into its context and cannot be suppressed by any current flag. The folder is one you chose, and `--tools` bounds the worst case to "read files here and write a misleading report" — but if you analyze a directory you don't trust, read the report with that in mind.
+
+### Case → code → fix
+
+The Workspace tab is **case-first**, because that's how the work actually arrives: a client reports something, you work out which folder it lives in, then you fix it.
+
+1. **Case** — search by number, owner, account or "all recent" (the same queries as the Lookup tab) and pick one. The app fetches its description, full conversation and **attachments** and stores them as a *brief* in `.analysis/cases/<SR>.json`; the case number goes in `.env` as `CREATIO_WORKSPACE_CASE`. Both survive a browser reload **and** a fresh Claude Code session. **Refresh** re-pulls the case when it has moved on; **Unbind** clears it.
+
+   The description is rebuilt into a readable list — support cases are usually numbered asks, and Creatio's HTML arrives flattened — with each ask's continuation lines and indented sub-points kept with it.
+
+   Attachments show as thumbnails (click to enlarge) or open-in-tab links, streamed through the read-only `/api/file` proxy. An image can be **saved straight into a workspace folder** (↓ save to folder) when the client wants it used in the template — e.g. a school logo. The filename is editable, since the template usually references a specific name.
+
+   > That save is the only write outside this repo besides an approved fix apply, so it is narrow: **images only** (no `.svg` — it can carry script), the bytes must actually *be* that image type (leading bytes are checked, so client-supplied content named `logo.png` is rejected and a JPEG can't be saved as `.png`), the target must be a configured folder, the client-supplied name is reduced to a bare filename, 10 MB cap, and replacing an existing file needs a second confirm and copies the original to `.analysis/assets/` first. Listing them needs `CaseFile` in `CREATIO_ALLOWED_ENTITIES`; without it the brief records a caveat instead of failing. **Their contents are not read when planning a fix** — the planner is given the filenames only, so a logo's exact colours still have to come from the case text.
+2. **Working directory** — the folders and their read-only analysis, exactly as described above.
+3. **Fix** — press **Plan the fix**. A read-only pass reads the case, the stored analysis and the relevant files, then shows you each proposed change as a **before/after diff** with its reasoning, risks and what it does *not* fix. Nothing has touched disk at this point. Press **Apply** and the edits are written and left **uncommitted and unstaged** so you review the diff yourself. Originals are backed up first, so it's reversible even outside git.
+
+   The review also breaks the case into **what the client actually asked for** — using the case's own numbering where it has any — marks each ask *addressed*, *partly addressed* or *not addressed*, and tags every edit with the ask it serves. So you can check the plan against the client's email rather than inferring intent from a diff, and see at a glance which parts were left alone.
+
+   An applied plan stays on screen as a read-only record of what it changed, and can't be applied twice — press **Plan the fix** again for a fresh one.
+
+   > Those *addressed* labels are the model's own claim, not something the app can verify. On the default **Opus** model they hold up — an ask needing a capability the code doesn't have comes back *not addressed*. Weaker/cheaper models over-claim: Haiku marked "add a PDF export button" as addressed and proposed a button that wouldn't do it. If you set `CREATIO_APP_MODEL` to something cheaper, treat the coverage labels as a prompt to check, not an answer.
+
+The phases are **softly ordered** — phase 2 works with no case bound, so you can still just analyze a folder. Phase 3 stays disabled, naming what's missing, until a case, folders and a stored analysis all exist.
+
+> **How the fix button stays safe.** Case descriptions and emails are prose written by clients and third parties, so the model that reads them is given **no write tools at all** — `Read`, `Glob` and `Grep` are the only things in its schema, with no `Bash`, no `WebFetch` and no `WebSearch`. It can only *propose* a structured list of edits. The **app** applies them, and before writing anything it re-checks that each file is a top-level source file of a configured folder and that the "before" text still matches **exactly once**. So the worst a malicious instruction buried in a case could achieve is a bad patch — one you see as a diff, that can't reach a file outside your workspace, that can't execute or phone home, and whose original is backed up.
+>
+> Apply is **all-or-nothing**: if any file changed between planning and approval, nothing is written and you re-plan. Plans, and the originals they replaced, are kept under `.analysis/fixes/<plan id>/`.
+>
+> **What the folder setting does and does not bound.** It bounds **edits** exactly — only a top-level source file of a configured folder can be written. It does **not** bound **reads**: `Glob` and `Grep` take absolute paths, so the planning pass can and does read shared code elsewhere on disk (tracing a report template back into `ReportCardRoot`, say) — everything except the denied `.env`, key and certificate patterns. That is usually what you want, since a fix often depends on an include outside the folder. The consequence to know: a plan may propose an edit to a file it could read but cannot write, and that edit shows as **can't apply** with a note to add the folder in phase 2 and re-plan.
+
+The in-app button needs no setup. The `creatio-case-fix` skill remains available for when you want to work a case through conversationally — pushing back on the diagnosis, asking for alternatives — rather than accepting or rejecting a diff. Run `/creatio-case-fix` in Claude Code from this repo; because the Creatio tools are project-scoped here while your files live elsewhere, it may ask you to `/add-dir <workspace path>` first, and it checks that *before* spending effort on a recommendation.
+
+### Bundled skills
+
+Three skills in `.claude/skills/` drive these workflows from a Claude Code conversation:
+
+| Skill | What it does |
+|---|---|
+| `creatio-case-lookup` | Interactive case lookup — who, which statuses, how much detail |
+| `workspace-analysis` | Analyzes the working folder(s) and stores the report (same 10-file total cap and over-cap prompt as the tab) |
+| `creatio-case-fix` | Reads a case's description + conversation, correlates it with the stored analysis, recommends a fix, and — **only after you approve** — applies the edits and leaves them **uncommitted** for review |
+
+The skills and the app share one implementation of the cap rule and the artifact schema via `dist/workspaceCli.js`, so reports from either side are interchangeable.
+
+Because the Creatio MCP server is project-scoped in `.mcp.json`, `creatio-case-fix` needs Claude Code running in *this* repo, while the files it edits usually live elsewhere. If it can't read your workspace, run `/add-dir <workspace path>` (or start with `--add-dir`) and retry.
 
 ---
 
@@ -147,6 +221,9 @@ Requires `npm run build` — the path points at `dist/`, which is git-ignored. A
 - **Local & single-user:** the web app binds to `127.0.0.1`, with no app-level auth by design.
 - **Secrets stay local:** cookies/credentials live in `.env` (git-ignored) and are masked in the UI; AI analysis receives only case **text**, never cookies.
 - **Bounded reach:** entity allowlist + `$top` clamp; the file proxy is limited to a fixed set of file entities and GUID ids.
+- **Workspace analysis is read-only too:** the analysis child gets `--tools Read,Glob,Grep`, which removes `Edit`/`Write`/`Bash` from its tool *schema*, plus deny rules for `.env`, keys and certificates. `--safe-mode` and `--setting-sources user` stop the analyzed folder's own `.claude/settings.json` hooks from running. Every tool call is recorded in the report sidecar.
+- **Applying fixes is gated on you:** both routes — the Workspace tab's **Plan the fix** and the `creatio-case-fix` skill — propose a change, wait for explicit approval, and leave the edits **uncommitted**. Nothing is ever committed, staged or pushed for you.
+- **The model that reads case text never holds a write tool:** planning runs with `--tools Read,Glob,Grep` and no `Bash`/`WebFetch`/`WebSearch`, and returns a structured edit list. The app applies it, re-verifying that every target is a top-level source file of a configured folder and that each "before" string still matches exactly once. Apply is all-or-nothing, and originals are backed up under `.analysis/fixes/`.
 
 ---
 
@@ -169,6 +246,7 @@ Requires `npm run build` — the path points at `dist/`, which is git-ignored. A
 | `npm run app` | Build + start the web app |
 | `npm start` | Start the MCP server (stdio) |
 | `npm run test-auth` | Verify credentials without starting anything |
+| `npm run workspace` | Workspace store CLI (`path` / `scan` / `load` / `save` / `case` / `attachment`) — used by the skills |
 
 ## License
 

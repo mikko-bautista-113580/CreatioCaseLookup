@@ -164,11 +164,13 @@ Tag each row FEED vs EMAIL, merge, sort by `CreatedOn`, strip HTML bodies, and
 for emails trim quoted-reply history (cut at `From:` / `On … wrote:` /
 `Caution: This Message is From an External Sender`).
 
-> ⚠️ **Do NOT assert who authored a feed post.** `SocialMessage.CreatedById` /
-> `Activity.AuthorId` are GUIDs that don't resolve to names over this OData
-> access, and inferring the author from `@mentions` in the text has been wrong
-> before. Report the message content and who is `@`-tagged, but present the
-> author as unresolved unless the user confirms it visually in the Creatio UI.
+> ℹ️ **Name the author from `Contact`, never from an `@mention`.**
+> `SocialMessage.CreatedById` is a `Contact` Id, so
+> `Contact?$filter=Id eq <CreatedById>&$select=Id,Name` gives you the poster
+> (batch the ids, ≤20 per request). Email senders match `Contact.Email`. If a
+> lookup returns nothing, say the author is unknown — an `@mention` names who
+> is being addressed, not who wrote, and reading it as the author has been
+> wrong before.
 
 ---
 
@@ -180,8 +182,8 @@ for emails trim quoted-reply history (cut at `From:` / `On … wrote:` /
 - Then append the requested detail (description / timeline / latest update /
   extra fields) per case, in the order chosen.
 - Convert relative timestamps to absolute dates.
-- Note any caveats: result truncation (50-cap), multiple owner matches,
-  unresolved authors, empty email bodies.
+- Note any caveats: result truncation (50-cap), multiple owner matches, any
+  author that didn't resolve, empty email bodies.
 - End by offering the obvious next step (e.g. full email bodies, page further
   back, open a linked report-card template).
 
