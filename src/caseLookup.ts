@@ -229,9 +229,47 @@ export type Segment =
 export const MENTION_OPEN = "\uE000";
 export const MENTION_CLOSE = "\uE001";
 
-/** Flatten mention sentinels back to plain "@Name", for text-only consumers. */
+/**
+ * Sentinels wrapping a hyperlink inside segment text: OPEN url SEP label CLOSE.
+ *
+ * Same trick as mentions — the UI escapes first, then swaps these for an <a>.
+ * Only http(s)/mailto URLs are ever wrapped. Keep in sync with public/app.js.
+ */
+export const LINK_OPEN = "";
+export const LINK_SEP = "";
+export const LINK_CLOSE = "";
+const LINK_RE = new RegExp(`${LINK_OPEN}([^${LINK_SEP}]*)${LINK_SEP}([^${LINK_CLOSE}]*)${LINK_CLOSE}`, "g");
+
+/** Flatten mention and link sentinels to plain text, for text-only consumers.
+ *  A link keeps its URL ("label <url>") so an AI reader can still see it. */
 export function plainMentions(s: string): string {
-  return s.split(MENTION_OPEN).join("@").split(MENTION_CLOSE).join("");
+  return s
+    .split(MENTION_OPEN).join("@").split(MENTION_CLOSE).join("")
+    .replace(LINK_RE, (_m, url: string, label: string) => {
+      const bare = url.replace(/^mailto:/i, "");
+      return !label || label === url || label === bare ? bare : `${label} <${url}>`;
+    });
+}
+
+/**
+ * Resolve an <a href> to a URL safe to show, or null to drop the link.
+ *
+ * Outlook SafeLinks wrappers are unwrapped to the real target — the wrapper is
+ * long, tracks the click, and hides where the file actually lives (e.g. the
+ * FTP mock-up PDFs customers link from their request emails).
+ */
+function safeHref(raw: string): string | null {
+  let href = decodeEntities(raw).trim();
+  try {
+    const u = new URL(href);
+    if (/\.safelinks\.protection\.outlook\.com$/i.test(u.hostname)) {
+      const inner = u.searchParams.get("url");
+      if (inner) href = inner;
+    }
+  } catch {
+    return null; // relative or malformed
+  }
+  return /^(https?:\/\/|mailto:)[^\s-]+$/i.test(href) ? href : null;
 }
 
 /** Decode the handful of entities strip() handles, but KEEP newlines. */
@@ -259,6 +297,17 @@ export function htmlToSegments(html: string | null | undefined): Segment[] {
     .replace(
       /<a[^>]*data-mention-display-value="([^"]*)"[^>]*>[\s\S]*?<\/a>/gi,
       (_m, name: string) => MENTION_OPEN + name + MENTION_CLOSE
+    )
+    // Keep ordinary hyperlinks (tags inside the label are dropped). An unsafe
+    // or relative href falls through, leaving just the label text.
+    .replace(
+      /<a\b[^>]*?\bhref\s*=\s*"([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi,
+      (m, href: string, inner: string) => {
+        const url = safeHref(href);
+        if (!url) return m;
+        const label = inner.replace(/<[^>]+>/g, "").replace(/[-]/g, "").trim();
+        return LINK_OPEN + url + LINK_SEP + label + LINK_CLOSE;
+      }
     );
 
   const segs: Segment[] = [];

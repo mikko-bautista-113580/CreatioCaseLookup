@@ -440,9 +440,25 @@ function withMentions(escaped) {
     );
   });
 }
-/** Escape, keep soft line breaks, then render mentions. */
+// Link sentinels, mirrored from src/caseLookup.ts: OPEN url SEP label CLOSE.
+const LINK_OPEN = "";
+const LINK_SEP = "";
+const LINK_CLOSE = "";
+const LINK_RE = new RegExp(LINK_OPEN + "([^" + LINK_SEP + "]*)" + LINK_SEP + "([^" + LINK_CLOSE + "]*)" + LINK_CLOSE, "g");
+
+/** Swap link sentinels in ALREADY-ESCAPED text for anchors. The server only
+ *  emits http(s)/mailto URLs; re-check here so nothing else becomes an href. */
+function withLinks(escaped) {
+  return String(escaped).replace(LINK_RE, (_m, url, label) => {
+    const text = label || url.replace(/^mailto:/i, "");
+    if (!/^(https?:\/\/|mailto:)/i.test(url)) return text;
+    return `<a class="seg-link" href="${url}" target="_blank" rel="noopener noreferrer" title="${url}">${text}</a>`;
+  });
+}
+
+/** Escape, keep soft line breaks, then render mentions and links. */
 function inlineText(t) {
-  return withMentions(esc(String(t || "")).replace(/\n/g, "<br/>"));
+  return withLinks(withMentions(esc(String(t || "")).replace(/\n/g, "<br/>")));
 }
 
 // A blank line starts a new paragraph; a single newline is a soft break inside
