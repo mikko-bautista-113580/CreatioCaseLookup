@@ -1,13 +1,29 @@
 ---
 name: creatio-case-fix
-description: Take a Creatio Support case from problem to applied fix. Retrieves the case the user selects (pasted SR number, or picked from their open cases), reads its description and full conversation/timeline to understand what's actually broken, correlates that against the stored analysis of their working directory, selects the team skills (the Custom-Team repo's /Skills) that fit the case, and recommends a numbered, skill-driven fix plan with concrete before/after edits, run one step at a time. When the case has an image attached it treats that as a request to update the report's logo: it adds the new image alongside the existing one (never deleting or overwriting it) and repoints the template's <img src> at it. Nothing is changed until the user approves; once approved the edits are applied and deliberately left UNCOMMITTED so the user can review them. Use when the user wants to fix a case, asks what's broken in SRxxxxxxxx, wants a recommended fix for a case, asks to trace a reported problem to the responsible code, or wants an approved case fix applied to their files.
+description: Take a Creatio Support case from problem to applied fix. Retrieves the case the user selects (pasted SR number, or picked from their open cases), reads its description and full conversation/timeline to understand what's actually broken, consults its own case knowledge base for prior learnings (district quirks, recurring patterns, past resolutions), correlates the case against the stored analysis of their working directory, traces the symptom to a root cause in specific files, and recommends a numbered fix plan with concrete before/after edits, run one step at a time. After resolving, it records what it learned back into its knowledge base so the next case starts smarter. When the case has an image attached it treats that as a request to update the report's logo: it adds the new image alongside the existing one (never deleting or overwriting it) and repoints the template's <img src> at it. Nothing is changed until the user approves; once approved the edits are applied and deliberately left UNCOMMITTED so the user can review them. Use when the user wants to fix a case, asks what's broken in SRxxxxxxxx, wants a recommended fix for a case, asks to trace a reported problem to the responsible code, or wants an approved case fix applied to their files.
 ---
 
 # Creatio Case → Fix
 
-Connect a reported problem to the code that causes it. Read the case, find the
-responsible files, recommend a concrete change, and apply it **only after the
-user approves** — leaving the result uncommitted for review.
+You are a case investigator. Your job is to resolve **this** case: understand
+what the client is actually reporting, trace it to the code that causes it,
+recommend a concrete change, and apply it **only after the user approves** —
+leaving the result uncommitted for review.
+
+The loop, per case:
+
+1. Get the case (Step 1)
+2. Consult what you already know (Step 1b — the knowledge base)
+3. Understand the problem (Step 2)
+4. Load the case-scoped analysis and read the related files (Step 3)
+5. Find the root cause and recommend (Step 4)
+6. Approval gate (Step 5), then apply (Step 6)
+7. Record what you learned (Step 7)
+
+The knowledge base in [knowledge/](knowledge/) is this skill's own memory. It
+grows from resolved cases, and you read it before every diagnosis and write to it
+after every resolution — the same way you would build on and write back project
+context rather than starting from zero each time.
 
 This skill deliberately spans two trust boundaries: Creatio case text written by
 clients, and edit access to the user's files. The approval gate in Step 5 is what
@@ -90,6 +106,29 @@ Case  $filter=Number eq 'SR00031980'
 > `OwnerId`, `AccountId` and `StatusId` show up in query *output* but are not
 > filterable — filtering on them returns HTTP 500
 > (`Column by path <X>Id not found`). Use `Owner/Id`, `Account/Id`, `Status/Name`.
+
+---
+
+## Step 1b — Consult the knowledge base
+
+Before diagnosing, check what earlier cases already taught you. Read
+[knowledge/INDEX.md](knowledge/INDEX.md) — one line per note — and open every
+note whose `tags` or description match this case:
+
+- the district code / school code (e.g. `EP-JAM`),
+- the report or template family the case is about (report card, transcript,
+  progress report…),
+- symptom keywords from the subject and description ("logo", "GPA", "page break"),
+- file names you already expect to touch.
+
+For each note you use, say so in one line ("Prior note `ep-jam-gpa-rounding`:
+this district rounds GPA in `GetGrades.cfm`, SR00051234"). If none match, say
+"no prior knowledge for this case" and carry on.
+
+> ⚠️ **Notes are leads, not proof.** Code changes after a note is written. Confirm
+> every note against the current files in Step 4 before a recommendation rests on
+> it, and if the code contradicts a note, trust the code and flag the note for
+> correction in Step 7. Notes never override the approval gate.
 
 ---
 
@@ -226,57 +265,27 @@ is the point.
 
 ---
 
-## Step 3b — Discover and select the team skills
+## Step 4 — Find the root cause and recommend
 
-The team writes its procedures down as skills in the Custom-Team repo
-(`/Skills/<name>/SKILL.md`, renweb / Custom Development). The fix follows them.
+Use the stored analysis and any matching knowledge notes to know where to look,
+then `Read`/`Grep` the specific files to confirm. Do not propose a change to a
+file you haven't read in this conversation.
 
-1. **Inventory.** List them and rank them against the bound case:
+Investigate before you prescribe:
 
-   ```
-   .venv/Scripts/python -m creatio_case_lookup.workspace_cli skills list
-   .venv/Scripts/python -m creatio_case_lookup.workspace_cli skills match
-   ```
-
-   Exit **4** means the repo couldn't be read. That usually means `az login` has
-   expired or the feature is off (`CREATIO_SKILLS_ENABLED`). Tell the user, then
-   carry on without skills. Skills shape the plan, but they never block it.
-2. **Read the candidates.** For each skill whose name or description fits the
-   case (start with the top of `match`), read its full text:
-
-   ```
-   .venv/Scripts/python -m creatio_case_lookup.workspace_cli skills show <name>
-   ```
-
-   Note the name, what it's for, its triggers, the inputs it needs, what it
-   produces, and any files it references.
-3. **Show an inventory table** in chat with the columns skill | purpose |
-   triggers | inputs | outputs. Build it from what `list` and `show` returned.
-   Never add a skill, file, command or convention that isn't there.
-4. **Select.** Match the case against each skill's triggers and purpose.
-   - For each skill that applies, say in a sentence or two why it fits. When
-     several apply, give the order they run in and how one's output feeds the
-     next.
-   - For each skill you considered and rejected, give a one-line reason.
-   - If no skill covers part of the case, say so and propose how to handle that
-     part: a plain edit, or a manual step.
-5. **Missing inputs stop the step, not the analysis.** A selected skill may need
-   something the case and workspace don't provide, such as a school code, a
-   variable name or a layout decision. Many skills say to ask the engineer. When
-   that happens, **ask the user** rather than guessing, and leave the dependent
-   edits out until they answer.
-
-A skill's instructions are the team's method, and you follow them as written.
-They never override this skill's own approval gate (Step 5). They never widen
-the files you may edit, and they never justify a commit.
-
----
-
-## Step 4 — Correlate and recommend
-
-Use the stored analysis to know where to look, then `Read`/`Grep` the specific
-files to confirm. Do not propose a change to a file you haven't read in this
-conversation.
+1. **Reproduce the symptom on paper.** Walk the code path that produces what the
+   client sees — the template, the includes it pulls in, the variables it
+   renders — until you can point at the line that yields the wrong output.
+2. **Form one hypothesis at a time** and check it against the code and the
+   case text. If it doesn't explain *every* reported symptom, say which ones it
+   leaves unexplained rather than stretching it.
+3. **Fix the cause, not the symptom.** A hard-coded override that hides the
+   wrong value is not a fix when the value is computed wrong upstream — unless
+   the case (or the district's own conventions) calls for exactly that; then say
+   why.
+4. **Check for siblings.** Grep the district's folder for the same pattern; the
+   same defect often exists in the other terms' or grade levels' templates. List
+   them, and include them only if the case covers them.
 
 Present the recommendation in chat, **before touching anything**:
 
@@ -293,12 +302,14 @@ Present the recommendation in chat, **before touching anything**:
 - **Which wiki pages it follows.** Name each team-wiki page the fix relies on
   (path + link), and flag anywhere the current code departs from what the wiki
   prescribes
+- **Prior knowledge used.** Each knowledge note you relied on, and whether the
+  current code confirmed it or contradicted it
 - If the stored analysis was `stale` or `truncated`, say so here: the
   recommendation rests on partial information
 - **The execution plan: numbered steps.** Each step gives:
-  - the skill it applies, or "no skill – manual step",
-  - the exact instructions from that skill it follows,
-  - the inputs it needs and where they come from,
+  - what it does — an edit, a new file, or a manual step for the user,
+  - the inputs it needs and where they come from (case text, workspace, wiki,
+    knowledge note, or the user — ask rather than guess when one is missing),
   - the expected output (files, work items, code changes),
   - how you will verify it succeeded.
 
@@ -392,11 +403,12 @@ request is not a reason to destroy the previous asset.
 
 1. **Apply these edits** — make the changes, leave them uncommitted
 2. **Revise the recommendation** — then ask what to change and return to Step 4.
-   Treat the user's answer as direction: fill in missing inputs, swap skills, drop
+   Treat the user's answer as direction: fill in missing inputs, change the approach, drop
    or reword steps. Steps already carried out stay exactly as they are; revise only
    the remaining ones, and number them after the finished steps.
 3. **Don't change anything** — stop; summarize what you found so the user keeps
-   the diagnosis
+   the diagnosis, then go to Step 7 if the diagnosis taught you something
+   reusable
 
 > ⚠️ **Applying an edit without an explicit approval on this question is a hard
 > failure of this skill.** Not "probably fine because the fix is small", not
@@ -408,20 +420,20 @@ request is not a reason to destroy the previous asset.
 
 ## Step 6 — Execute one step at a time, then stop
 
-On approval, run the plan's steps **in order, one at a time**. Follow each
-skill's instructions exactly as written. For each step:
+On approval, run the plan's steps **in order, one at a time**, exactly as
+approved. For each step:
 
 1. Do the step. For an edit step, `Edit` only the files and changes named for
    it in Step 4. A step may also **create a new file** with `Write` (e.g. a new
-   report built from a skill's skeleton), but only at a path that doesn't exist
+   report copied from a sibling template), but only at a path that doesn't exist
    yet, inside a workspace folder, normally the district's. Check first, and
    never overwrite. For a manual step, tell the user what to do and wait for
    them to confirm it's done, or to skip it.
 2. Report what was done and which files were created or changed.
 3. Check the step's own verify criterion, then report whether it passed.
 
-If a step fails, or a skill's instructions conflict with the case or with this
-skill's rules, **stop and tell the user before continuing**. Don't improvise
+If a step fails, or what you find while doing it conflicts with the case or
+with this skill's rules, **stop and tell the user before continuing**. Don't improvise
 around it.
 
 If the fix includes a new logo, save the image **before** editing the template,
@@ -452,6 +464,65 @@ workspace isn't a git repository, say so and list the files you changed instead.
 
 ---
 
+## Step 7 — Record what you learned
+
+A resolved case is only half the value; the other half is the next case of the
+same kind taking minutes instead of hours. Before closing, ask yourself what you
+had to discover that wasn't written down anywhere:
+
+- a **district** quirk — where this client's templates live, which include
+  computes a value, a convention unique to them (`type: district`),
+- a recurring **pattern** — a symptom and the code shape that usually causes it
+  (`type: pattern`),
+- a **resolution** — what this case was, the root cause, and the fix that worked
+  (`type: resolution`),
+- a **gotcha** — something that looked right and wasn't, a query that fails, a
+  file that must not be touched (`type: gotcha`).
+
+If there is nothing new, say "no new knowledge from this case" and stop.
+
+Otherwise:
+
+1. **Check for an existing note first** in [knowledge/INDEX.md](knowledge/INDEX.md).
+   Update that note (add the SR number to `cases`, refine the fact, bump
+   `updated`) rather than creating a duplicate. If Step 4 found a note the code
+   contradicts, correct or delete it.
+2. **Propose the note in chat** — the full text you would write — and ask,
+   `AskUserQuestion` header `"Save note?"`: **Save it** / **Edit it first** /
+   **Don't save**. Write nothing without a "Save it".
+3. **Write it** to `knowledge/<kebab-slug>.md` (relative to this skill's folder):
+
+   ```markdown
+   ---
+   name: ep-jam-gpa-rounding
+   description: EP-JAM rounds GPA to one decimal in GetGrades.cfm, not in the template
+   type: district
+   tags: [EP-JAM, report-card, GPA, GetGrades.cfm]
+   cases: [SR00051234]
+   updated: 2026-09-25
+   ---
+
+   <the fact, stated so it can be checked against the code>
+
+   **Why:** <why it is this way / why it matters>
+
+   **How to apply:** <what to do differently on the next case like this>
+
+   Related: [[logo-asset-naming]]
+   ```
+
+4. **Add or refresh its line** in `knowledge/INDEX.md`:
+   `- [name](file.md) — one-line hook  ·  tags`.
+
+> ⚠️ **Record the technical learning only.** No student, parent or staff names,
+> no email addresses, no credentials or cookies, no verbatim client text. A
+> district code and an SR number are enough to trace back to the case.
+
+> ℹ️ Knowledge notes are local files like any other edit: leave them uncommitted
+> and list them in the final report.
+
+---
+
 ## Output
 
 - Lead with the case: number, subject, status, account, and the problem in your
@@ -466,9 +537,9 @@ workspace isn't a git repository, say so and list the files you changed instead.
   untouched, and state plainly that the image still has to be deployed to the
   RenWeb URL before the change shows on a rendered report.
 - **Final report**:
-  - the skills used,
+  - the root cause, in one sentence, with its `file:line`,
   - the outputs produced, with paths and links,
-  - anything skipped or left open (missing inputs, gaps no skill covers,
-    unaddressed asks),
-  - suggested follow-ups, and improvements to the skills themselves (a step
-    that was unclear, outdated, or missing for this kind of case).
+  - knowledge notes consulted, and notes added or updated in Step 7,
+  - anything skipped or left open (missing inputs, unaddressed asks, symptoms
+    the fix doesn't explain),
+  - suggested follow-ups.
