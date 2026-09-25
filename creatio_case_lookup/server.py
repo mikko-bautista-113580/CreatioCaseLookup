@@ -43,7 +43,6 @@ from fastapi import FastAPI, Request
 from fastapi.responses import Response, StreamingResponse
 
 from . import paths as _paths
-from .ado_wiki import get_wiki_page, test_wiki
 from .analyze import analyze_cases, claude_available
 from .analyze_workspace import analyze_workspace
 from .case_brief import (
@@ -68,7 +67,7 @@ from .case_lookup import (
     resolve_account,
     resolve_owner,
 )
-from .case_scope import compute_case_scope, scope_summary
+from .case_scope import compute_case_scope
 from .creatio_client import (
     ALLOWED_ENTITIES,
     BASE_URL,
@@ -80,8 +79,6 @@ from .creatio_client import (
     test_connection,
 )
 from .env import read_env_file, write_env_file
-from .ado_skills import attach_skill_assets, list_skills, load_all_skills, select_skills, skills_config, skills_summary, test_skills
-from .case_keywords import extract_case_terms
 from .fix_plan import (
     FixPlanError,
     apply_plan,
@@ -96,7 +93,6 @@ from .fix_plan import (
     verify_step,
     with_created_files,
 )
-from .wiki_select import clip_wiki_pages
 from .workspace import (
     MAX_PATHS,
     WorkspacePathError,
@@ -311,36 +307,6 @@ def editable_enumeration(abs_paths: list[str], case_number: str | None, plan: di
     return with_created_files(with_case_files(en, ca["meta"].get("selection") if ca else None, abs_paths), plan)
 
 
-async def wiki_for_analysis(refs: list[dict] | None) -> list[dict]:
-    """Re-load wiki pages a stored case analysis used (from the 24h cache when fresh)."""
-
-    async def one(r: dict) -> dict | None:
-        try:
-            page = await get_wiki_page(r["path"])
-            return {**r, "content": page["content"]}
-        except Exception:  # noqa: BLE001 — a missing page is simply left out
-            return None
-
-    pages = await asyncio.gather(*(one(r) for r in (refs or [])))
-    return clip_wiki_pages([p for p in pages if p])
-
-
-async def skills_for_case(brief: dict) -> tuple[list[dict], str | None]:
-    """The team skills for a fix plan: every skill, ranked against the case, with
-    full text for the best few -> (skills, warning). Never raises: a plan without
-    skills is still a plan."""
-    try:
-        skills = await load_all_skills()
-    except Exception as e:  # noqa: BLE001 - optional, like the wiki
-        return [], str(e)
-    if not skills:
-        return [], "The team skills repo has no skill folders with a SKILL.md."
-    selected = select_skills(skills, extract_case_terms(brief), skills_config()["maxFull"])
-    # The skeletons and references a chosen skill points at, so a plan can build
-    # a new file from them rather than guess.
-    return await attach_skill_assets(selected), None
-
-
 def to_scope_input(scope: dict, brief: dict) -> dict:
     out: dict = {
         "caseNumber": scope["caseNumber"],
@@ -349,13 +315,7 @@ def to_scope_input(scope: dict, brief: dict) -> dict:
             {k: f.get(k) for k in ("rel", "folder", "score", "reason", "size", "mtime", "ext")}
             for f in scope["files"]
         ],
-        "wiki": [
-            {"path": w["path"], "url": w["url"], "why": w["why"], "content": w["content"]}
-            for w in clip_wiki_pages(scope["wiki"])
-        ],
     }
-    if scope.get("wikiSkipped") is not None:
-        out["wikiSkipped"] = scope["wikiSkipped"]
     if brief.get("fetchedAt") is not None:
         out["briefFetchedAt"] = brief["fetchedAt"]
     return out
@@ -495,27 +455,7 @@ async def api_config_post(request: Request) -> Response:
     return send_json(200, {"saved": True, "restartNeeded": restart_needed, "connection": test})
 
 
-# Settings: can the Azure CLI login read the team wiki?
-@route("GET", "/api/wiki/test")
-async def api_wiki_test(request: Request) -> Response:
-    return send_json(200, await test_wiki())
 
-
-# Phase 3's checklist row: which team skills a plan will be given. Served from
-# the 24h cache when fresh, so rendering the page doesn't hit Azure DevOps.
-@route("GET", "/api/skills")
-async def api_skills(request: Request) -> Response:
-    try:
-        skills = await list_skills()
-        return send_json(200, {"ok": True, "skills": [{"name": s["name"], "url": s["url"]} for s in skills]})
-    except Exception as e:  # noqa: BLE001 — optional; the row just says why
-        return send_json(200, {"ok": False, "skills": [], "message": str(e), "reason": getattr(e, "reason", "http")})
-
-
-# Settings: can the Azure CLI login read the team skills repo?
-@route("GET", "/api/skills/test")
-async def api_skills_test(request: Request) -> Response:
-    return send_json(200, await test_skills())
 
 
 # ---------------------------------------------------------------------------
@@ -560,8 +500,6 @@ async def api_workspace_get(request: Request) -> Response:
                     "caseNumber": number,
                     "finishedAt": meta.get("finishedAt"),
                     "files": meta.get("selection") or [],
-                    "wikiPages": meta.get("wikiPages") or [],
-                    "wikiSkipped": meta.get("wikiSkipped") or None,
                 }
                 if "truncated" in meta:
                     case_analysis["truncated"] = meta["truncated"]
@@ -652,8 +590,7 @@ async def api_workspace_analysis(request: Request) -> Response:
 
 
 # Instant, model-free preview of what a case-scoped analysis would read: the
-# case keywords, the related files (searched recursively) and the matching
-# team-wiki pages.
+# case keywords and the related files (searched recursively).
 @route("GET", "/api/workspace/case-scope")
 async def api_workspace_case_scope(request: Request) -> Response:
     try:
@@ -664,8 +601,8 @@ async def api_workspace_case_scope(request: Request) -> Response:
         if not abs_paths:
             return send_json(400, {"error": "path", "message": "No workspace folder configured."})
         await ensure_case_info(bb["brief"])
-        scope = await compute_case_scope(bb["brief"], abs_paths, wiki=request.query_params.get("wiki") != "0")
-        return send_json(200, scope_summary(scope))
+        scope = await compute_case_scope(bb["brief"], abs_paths)
+        return send_json(200, scope)
     except Exception as e:  # noqa: BLE001
         return _path_error(e)
 
@@ -881,7 +818,7 @@ async def api_workspace_fix_step_done(request: Request) -> Response:
         return send_json(400, {"error": "fix", "message": str(e)})
 
 
-# The final report: skills used, what changed, what was skipped or left open.
+# The final report: the steps, what changed, what was skipped or left open.
 @route("POST", "/api/workspace/fix/finish")
 async def api_workspace_fix_finish(request: Request) -> Response:
     try:
@@ -1158,7 +1095,7 @@ async def handle_workspace_analyze(request: Request) -> Response:
                     "error": "no_match",
                     "message": f"No files in the workspace matched {bb['brief']['number']}'s keywords ({terms}). "
                     "Add the folder that holds this school's files in phase 2, or check the case's district code.",
-                    "scope": scope_summary(scope),
+                    "scope": scope,
                 },
             )
         scope_input = to_scope_input(scope, bb["brief"])
@@ -1216,7 +1153,7 @@ async def handle_workspace_analyze(request: Request) -> Response:
             },
         )
         if scope is not None:
-            yield sse("scope", scope_summary(scope))
+            yield sse("scope", scope)
 
         q: asyncio.Queue = asyncio.Queue()
         cancel = asyncio.Event()
@@ -1359,7 +1296,7 @@ async def _fix_plan_run(revise: dict | None = None) -> Response:
     # rather than silently trusted.
     #
     # The case-scoped analysis for this case wins when there is one: it was built
-    # from exactly the files this case touches, plus the team wiki.
+    # from exactly the files this case touches.
     case_stored = load_analysis_for(abs_paths, "case", number)
     stored = case_stored or load_analysis_for(abs_paths, "directory")
     analysis_stale = False
@@ -1370,8 +1307,6 @@ async def _fix_plan_run(revise: dict | None = None) -> Response:
             analysis_stale = is_stale(stored["meta"], enumerate_workspaces(abs_paths))
         except Exception:  # noqa: BLE001 — enumeration already succeeded above; treat as current
             pass
-    wiki = await wiki_for_analysis(case_stored["meta"].get("wikiPages")) if case_stored else []
-    skills, skills_warning = await skills_for_case(brief)
     smeta = stored["meta"] if stored else None
 
     async def gen() -> AsyncIterator[str]:
@@ -1387,9 +1322,6 @@ async def _fix_plan_run(revise: dict | None = None) -> Response:
                 "analysisStale": analysis_stale,
                 "analysisFiles": len((smeta or {}).get("filesAnalyzed") or []),
                 "analysisMode": (smeta or {}).get("mode") or None,
-                "wikiPages": [{"path": w["path"], "url": w["url"]} for w in wiki],
-                "skills": skills_summary(skills),
-                "skillsWarning": skills_warning,
                 "revising": (
                     {"id": prior["id"], "revision": int(prior.get("revision") or 1) + 1, "locked": len(locked_steps(prior))}
                     if prior
@@ -1432,9 +1364,6 @@ async def _fix_plan_run(revise: dict | None = None) -> Response:
                     "enumeration": en,
                     "brief": brief,
                     "analysis_stale": analysis_stale,
-                    "wiki": wiki,
-                    "skills": skills,
-                    "skills_warning": skills_warning,
                     "cancel": cancel,
                 }
                 if prior:

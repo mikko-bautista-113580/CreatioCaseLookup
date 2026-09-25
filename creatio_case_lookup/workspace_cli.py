@@ -17,18 +17,11 @@ Usage:
        ... with the Markdown report on stdin
   python -m creatio_case_lookup.workspace_cli case [<SRxxxxxxxx>]
   python -m creatio_case_lookup.workspace_cli attachment <fileId> <saveAsName> [--path <folder>] [--overwrite]
-  python -m creatio_case_lookup.workspace_cli scope [<SRxxxxxxxx>] [--path <p>]... [--no-wiki]
-  python -m creatio_case_lookup.workspace_cli wiki search <terms...>
-  python -m creatio_case_lookup.workspace_cli wiki page <path>
-  python -m creatio_case_lookup.workspace_cli skills list | show <name> | match [<SRxxxxxxxx>]
+  python -m creatio_case_lookup.workspace_cli scope [<SRxxxxxxxx>] [--path <p>]...
 
-`skills` reads the team's skills (/Skills/<name>/SKILL.md in the Custom-Team
-repo) through the same Azure CLI login; `match` ranks them against a case.
-
-`scope` prints what a case-scoped analysis would read — the case keywords,
-the related files (searched recursively, ranked, capped) and the matching
-team-wiki pages — without running a model. `wiki` searches and reads the
-team's Azure DevOps wiki through the user's Azure CLI login.
+`scope` prints what a case-scoped analysis would read — the case keywords and
+the related files (searched recursively, ranked, capped) — without running a
+model.
 
 `save` takes folders as repeatable --path flags rather than positionally,
 because otherwise a folder and the mode/target arguments would be ambiguous.
@@ -60,8 +53,6 @@ import math
 import sys
 from typing import Any, NoReturn
 
-from .ado_skills import get_skill_by_name, load_all_skills, select_skills, skills_config, skills_summary
-from .ado_wiki import WikiUnavailable, get_wiki_page, get_wiki_tree
 from .case_brief import (
     CaseNumberError,
     brief_age_hours,
@@ -72,10 +63,8 @@ from .case_brief import (
     validate_case_number,
 )
 from .case_files import is_case_analysis_stale
-from .case_keywords import extract_case_terms, sanitize_term
 from .case_lookup import _js_trim
-from .case_scope import compute_case_scope, scope_summary
-from .wiki_select import score_by_path
+from .case_scope import compute_case_scope
 from .workspace import (
     MAX_PATHS,
     WorkspacePathError,
@@ -307,7 +296,7 @@ def cmd_save(args: dict) -> None:
             "       with the Markdown report on stdin.",
         )
     mode = raw_mode
-    # Case analyses carry a selection and wiki refs only the app computes.
+    # Case analyses carry a selection only the app computes.
     if mode not in ("directory", "file"):
         die(EXIT_USAGE, f'Mode must be "directory" or "file", got "{raw_mode}".')
 
@@ -471,7 +460,7 @@ def cmd_attachment(args: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# scope / wiki
+# scope
 # ---------------------------------------------------------------------------
 
 
@@ -488,62 +477,7 @@ def cmd_scope(args: dict) -> None:
             f"No stored brief for {number}. Bind it from the app's Workspace tab (phase 1) so its text is fetched.",
         )
     abs_paths = resolve_targets(args["paths"])
-    scope = asyncio.run(compute_case_scope(brief, abs_paths, wiki=args["flags"].get("no-wiki") is not True))
-    out(scope_summary(scope))
-
-
-def cmd_wiki(args: dict) -> None:
-    pos = args["positional"]
-    sub = pos[0] if pos else None
-    rest = pos[1:]
-    try:
-        if sub == "search" and rest:
-            terms = [{"term": t, "weight": 1, "kind": "word"} for t in (sanitize_term(r) for r in rest) if t]
-            tree = asyncio.run(get_wiki_tree())
-            out({"pages": len(tree), "matches": score_by_path(tree, terms)[:15]})
-            return
-        if sub == "page" and rest:
-            out(asyncio.run(get_wiki_page(" ".join(rest))))
-            return
-    except WikiUnavailable as e:
-        die(EXIT_NOT_FOUND, str(e))
-    die(EXIT_USAGE, "Usage: python -m creatio_case_lookup.workspace_cli wiki search <terms...> | python -m creatio_case_lookup.workspace_cli wiki page <path>")
-
-
-def cmd_skills(args: dict) -> None:
-    """The team skills in the Custom-Team repo: list them, read one, or rank
-    them against a case — the same inventory and ranking the app's fix planner
-    is given."""
-    pos = args["positional"]
-    sub = pos[0] if pos else None
-    rest = pos[1:]
-    try:
-        if sub == "list" and not rest:
-            skills = asyncio.run(load_all_skills())
-            out({
-                "repo": skills_config(),
-                "skills": [{k: s.get(k) for k in ("name", "description", "url", "files")} for s in skills],
-            })
-            return
-        if sub == "show" and len(rest) == 1:
-            skill = asyncio.run(get_skill_by_name(rest[0]))
-            if not skill:
-                die(EXIT_NOT_FOUND, f'No skill named "{rest[0]}" in the team skills repo.')
-            out(skill)
-            return
-        if sub == "match" and len(rest) <= 1:
-            number = validate_case_number(rest[0]) if rest else get_bound_case()
-            if not number:
-                die(EXIT_NOT_FOUND, f"No case is bound. Pass one: {CLI} skills match SR00031980")
-            brief = load_brief(number)
-            if not brief:
-                die(EXIT_NOT_FOUND, f"No stored brief for {number}. Bind it from the app's Workspace tab (phase 1).")
-            ranked = select_skills(asyncio.run(load_all_skills()), extract_case_terms(brief), skills_config()["maxFull"])
-            out({"caseNumber": number, "skills": skills_summary(ranked)})
-            return
-    except WikiUnavailable as e:
-        die(EXIT_NOT_FOUND, str(e))
-    die(EXIT_USAGE, f"Usage: {CLI} skills list | {CLI} skills show <name> | {CLI} skills match [<SRxxxxxxxx>]")
+    out(asyncio.run(compute_case_scope(brief, abs_paths)))
 
 
 # ---------------------------------------------------------------------------
@@ -558,10 +492,7 @@ USAGE = (
     f"  {CLI} save <directory|file> [<targetFile>] [--path <p>]... [--over-cap] [--model <id>]\n"
     f"  {CLI} case [<SRxxxxxxxx>]\n"
     f"  {CLI} attachment <fileId> <saveAsName> [--path <folder>] [--overwrite]\n"
-    f"  {CLI} scope [<SRxxxxxxxx>] [--path <p>]... [--no-wiki]\n"
-    f"  {CLI} wiki search <terms...>\n"
-    f"  {CLI} wiki page <path>\n"
-    f"  {CLI} skills list | show <name> | match [<SRxxxxxxxx>]"
+    f"  {CLI} scope [<SRxxxxxxxx>] [--path <p>]..."
 )
 
 
@@ -583,10 +514,6 @@ def _dispatch(argv: list[str]) -> None:
         return cmd_attachment(args)
     if cmd == "scope":
         return cmd_scope(args)
-    if cmd == "wiki":
-        return cmd_wiki(args)
-    if cmd == "skills":
-        return cmd_skills(args)
     die(EXIT_USAGE, USAGE)
 
 

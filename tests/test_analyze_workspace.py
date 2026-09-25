@@ -160,8 +160,6 @@ def test_case_run_meta_and_location(env):
         "terms": ["gpa"],
         "files": [{"rel": "a.cfm", "folder": env["ws"], "score": 2, "reason": "content: gpa", "size": 26,
                    "mtime": "2026-01-01T00:00:00.000Z", "ext": ".cfm"}],
-        "wiki": [],
-        "wikiSkipped": "Wiki not configured.",
         "briefFetchedAt": "2026-09-01T00:00:00.000Z",
     }
     env["script"](chunks=["## Purpose\nx"], result={"result": "x"})
@@ -171,12 +169,12 @@ def test_case_run_meta_and_location(env):
     assert "costUsd" not in out["done"]
     meta = json.loads((env["store"] / slug / "cases" / "SR00012345.json").read_text(encoding="utf-8"))
     assert list(meta) == [k for k in META_KEYS if k != "durationMs"] + [
-        "selection", "wikiPages", "terms", "briefFetchedAt", "wikiSkipped"]
+        "selection", "terms", "briefFetchedAt"]
     assert meta["target"] == "SR00012345" and meta["mode"] == "case"
     assert meta["filesAnalyzed"] == [{"name": "a.cfm", "folder": env["ws"], "size": 26,
                                       "mtime": "2026-01-01T00:00:00.000Z", "ext": ".cfm"}]
     assert meta["selection"] == [{"rel": "a.cfm", "folder": env["ws"], "score": 2, "reason": "content: gpa"}]
-    assert meta["wikiPages"] == [] and meta["terms"] == ["gpa"] and meta["usage"] == {}
+    assert meta["terms"] == ["gpa"] and meta["usage"] == {}
     rec = json.loads((env["tmp"] / "argv.json").read_text(encoding="utf-8"))
     assert rec["argv"][rec["argv"].index("-p") + 1] == aw.CASE_INSTRUCTION
     assert "--add-dir" not in rec["argv"]

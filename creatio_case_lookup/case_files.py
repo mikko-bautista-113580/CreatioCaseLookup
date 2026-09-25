@@ -34,7 +34,6 @@ from collections import deque
 from typing import Callable
 
 from .case_keywords import count_term_hits
-from .wiki_select import idf
 from .workspace import (
     MAX_FILE_BYTES,
     SECRET_RE,
@@ -50,6 +49,15 @@ from .workspace import (
     locale_key,
     parse_iso_ms,
 )
+
+
+def idf(df: int, n: int) -> float:
+    """How distinctive a term is across a collection: ~1 when it appears almost
+    nowhere, falling towards 0 as it appears everywhere. "report" in a folder
+    full of report cards picks nothing out."""
+    if n <= 1:
+        return 1
+    return math.log(1 + n / (1 + df)) / math.log(1 + n)
 
 MAX_DEPTH = 5
 MAX_FILES = 5000

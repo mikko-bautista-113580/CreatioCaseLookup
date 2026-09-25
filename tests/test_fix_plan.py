@@ -169,11 +169,9 @@ def test_clip_format():
 # validate_plan
 # ---------------------------------------------------------------------------
 BRIEF = {"number": "SR00012345", "subject": "GPA wrong"}
-WIKI = [{"path": "/Training/Vars", "url": "https://w/1", "why": "gpa", "content": "body"},
-        {"path": "/Other", "url": "https://w/2", "why": "x"}]
 
 
-def test_validate_plan_requests_references_and_edits(tmp_path):
+def test_validate_plan_requests_and_edits(tmp_path):
     root, en = setup(tmp_path)
     parsed = {
         "problem": "p", "whyItFixes": "w", "notFixed": "n", "risks": "r", "assumptions": "a",
@@ -189,9 +187,12 @@ def test_validate_plan_requests_references_and_edits(tmp_path):
             {**edit("top.cfm", root, "alpha"), "requestId": "nope"},
             "garbage",
         ],
-        "references": ["/Training/Vars", " /Other ", "/Not/On/Stdin", 7],
+        # Fields the plan no longer carries are ignored.
+        "references": ["/Training/Vars"],
+        "skills": {"selected": [{"name": "x"}]},
+        "skillFeedback": ["x"],
     }
-    plan = validate_plan(parsed, en=en, paths=[root], brief=BRIEF, report="the report", model="m", wiki=WIKI)
+    plan = validate_plan(parsed, en=en, paths=[root], brief=BRIEF, report="the report", model="m")
     assert plan["requests"] == [
         {"id": "1", "text": "Fix GPA", "status": "addressed"},
         {"id": "1'", "text": "Rank label", "status": "partial"},
@@ -200,24 +201,20 @@ def test_validate_plan_requests_references_and_edits(tmp_path):
     assert plan["edits"][0]["ok"] and plan["edits"][0]["requestId"] == "1'"
     assert plan["edits"][1]["ok"] and "requestId" not in plan["edits"][1]
     assert plan["edits"][2]["ok"] is False and plan["edits"][2]["problem"] == "The plan named no file."
-    assert plan["references"] == ["/Training/Vars", "/Other"]
-    assert plan["wikiPages"] == [{"path": "/Training/Vars", "url": "https://w/1", "why": "gpa"},
-                                 {"path": "/Other", "url": "https://w/2", "why": "x"}]
     assert plan["warnings"] == []
     assert plan["confidence"] == "unstated"
     assert re.fullmatch(r"SR00012345-\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z", plan["id"])
     assert plan["id"] == "SR00012345-" + re.sub(r"[:.]", "-", plan["createdAt"])
     assert list(plan) == ["version", "id", "caseNumber", "caseSubject", "paths", "model", "createdAt", "report",
                           "problem", "whyItFixes", "notFixed", "risks", "assumptions", "confidence", "requests",
-                          "warnings", "references", "wikiPages", "skills", "steps", "stepStatus", "missingInputs",
-                          "skillFeedback", "edits", "toolCalls", "usage"]
+                          "warnings", "steps", "stepStatus", "missingInputs", "edits", "toolCalls", "usage"]
     assert plan["toolCalls"] == [] and plan["usage"] == {}
 
 
 def test_validate_plan_limits_and_garbage(tmp_path):
     root, en = setup(tmp_path)
     plan = validate_plan(None, en=en, paths=[root], brief=BRIEF, report="")
-    assert "model" not in plan and plan["edits"] == [] and plan["requests"] == [] and plan["references"] == []
+    assert "model" not in plan and plan["edits"] == [] and plan["requests"] == []
     many = {"edits": [edit("top.cfm", root, "alpha")] * 21}
     w = validate_plan(many, en=en, paths=[root], brief=BRIEF, report="")["warnings"]
     assert len(w) == 1 and w[0].startswith("Unusually broad: 21 edits, against a guideline of 20. ")
@@ -396,14 +393,13 @@ def run_plan(opts):
 PLAN_BLOCK = ("Explanation.\n\n```json\n" + json.dumps({
     "problem": "GPA label", "requests": [{"id": "1", "text": "Rename GPA", "status": "addressed"}],
     "edits": [{"file": "lf.cfm", "folder": "{ROOT}", "oldStr": "beta", "newStr": "gamma", "why": "w", "requestId": "1"}],
-    "confidence": "high", "references": ["/W"],
+    "confidence": "high",
 }) + "\n```\n")
 
 
 def plan_opts(root, en, **kw):
     return {"paths": [root], "enumeration": en, "brief": {**BRIEF, "status": "Open", "account": "A", "createdOn": "c",
-            "description": "d", "timeline": []}, "model": "m-plan",
-            "wiki": [{"path": "/W", "url": "https://w", "why": "y", "content": "c"}], **kw}
+            "description": "d", "timeline": []}, "model": "m-plan", **kw}
 
 
 def test_plan_fix_harvests_and_saves(tmp_path, fixes, fake):
@@ -419,7 +415,7 @@ def test_plan_fix_harvests_and_saves(tmp_path, fixes, fake):
     plan = d["plan"]
     assert plan["model"] == "m-plan" and plan["report"] == block
     assert plan["edits"][0]["ok"] and plan["edits"][0]["requestId"] == "1"
-    assert plan["references"] == ["/W"] and plan["confidence"] == "high"
+    assert plan["confidence"] == "high"
     assert plan["toolCalls"] == [{"name": "Read", "target": "lf.cfm"}]
     assert plan["usage"] == {"costUsd": 0.25, "totalTokens": 10}
     assert load_plan(plan["id"]) == plan and latest_plan() == plan
@@ -466,75 +462,34 @@ def test_fix_timeout(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Team skills: stdin block, steps, per-step apply, final report
+# Steps: per-step apply, final report
 # ---------------------------------------------------------------------------
-SKILLS = [
-    {"name": "facts-sis-reports", "url": "https://git/1", "description": "Report card templates", "files": ["ref.md"],
-     "full": True, "content": "# Reports\nUse GetGrades.cfm."},
-    {"name": "external-api-user-story", "url": "https://git/2", "description": "ADO stories", "files": [],
-     "full": False, "content": ""},
-]
-
-
-def test_fix_stdin_skills_block(tmp_path):
-    root = make_ws(tmp_path)
-    opts = {"paths": [root], "enumeration": enumerate_workspaces([root]), "brief": BRIEF, "skills": SKILLS}
-    s = build_fix_stdin(opts)
-    assert "=== TEAM SKILLS — INVENTORY." in s
-    assert "  - facts-sis-reports: Report card templates\n      files: ref.md\n      (full text below)" in s
-    assert "  - external-api-user-story: ADO stories\n" in s
-    assert "--- facts-sis-reports (https://git/1) ---\n# Reports\nUse GetGrades.cfm." in s
-    assert "external-api-user-story (https://git/2)" not in s
-    assert s.index("TEAM SKILLS") < s.index("=== CASE")
-    none = build_fix_stdin({**opts, "skills": [], "skills_warning": "Run az login."})
-    assert "=== NO TEAM SKILLS === Run az login." in none and "INVENTORY" not in none
-    assert "TEAM SKILLS" not in build_fix_stdin({**opts, "skills": []})
-
-
-def test_validate_plan_skills_and_steps(tmp_path):
+def test_validate_plan_steps(tmp_path):
     root = make_ws(tmp_path)
     en = enumerate_workspaces([root])
     parsed = {
-        "skills": {
-            "inventory": [{"name": "FACTS-SIS-REPORTS", "purpose": "reports", "triggers": "t", "inputs": "i", "outputs": "o"},
-                          {"name": "made-up", "purpose": "x"}],
-            "selected": [{"name": "facts-sis-reports", "order": 1, "why": "fits", "feeds": ""},
-                         {"name": "ghost-skill", "why": "?"}],
-            "rejected": [{"name": "external-api-user-story", "reason": "not an API case"}],
-            "gaps": ["deploy to server"],
-        },
         "steps": [
-            {"n": 3, "skill": "facts-sis-reports", "kind": "manual", "instructions": "Edit the template"},
-            {"n": 7, "skill": "ghost-skill", "instructions": "Deploy"},
-            {"n": 9, "skill": None, "kind": "edit", "instructions": "Tell the client"},
+            {"n": 3, "kind": "manual", "instructions": "Edit the template", "skill": "ignored", "url": "ignored"},
+            {"n": 7, "instructions": "Deploy"},
+            {"n": 9, "kind": "edit", "instructions": "Tell the client"},
         ],
         "edits": [
             {"file": "lf.cfm", "folder": root, "oldStr": "beta", "newStr": "B", "why": "", "step": 3},
             {"file": "crlf.cfm", "folder": root, "oldStr": "<p>Rank $1</p>", "newStr": "x", "why": "", "step": "42"},
         ],
         "missingInputs": ["the school code", ""],
-        "skillFeedback": ["facts-sis-reports: document GetGrades"],
     }
-    plan = validate_plan(parsed, en=en, paths=[root], brief=BRIEF, report="", skills=SKILLS)
-    sk = plan["skills"]
-    assert [i["name"] for i in sk["inventory"]] == ["facts-sis-reports", "external-api-user-story"]
-    assert sk["inventory"][1]["purpose"] == "ADO stories"  # completed from the repo's own description
-    assert [(x["name"], x["url"]) for x in sk["selected"]] == [("facts-sis-reports", "https://git/1")]
-    assert sk["rejected"] == [{"name": "external-api-user-story", "reason": "not an API case"}]
-    assert sk["gaps"] == ["deploy to server"]
-    assert sk["available"] == [{"name": "facts-sis-reports", "url": "https://git/1", "full": True},
-                               {"name": "external-api-user-story", "url": "https://git/2", "full": False}]
+    plan = validate_plan(parsed, en=en, paths=[root], brief=BRIEF, report="")
     steps = plan["steps"]
-    assert [(s["n"], s["skill"], s["kind"]) for s in steps] == [
-        (1, "facts-sis-reports", "edit"), (2, None, "manual"), (3, None, "manual"), (4, None, "edit")]
+    assert [(s["n"], s["kind"]) for s in steps] == [(1, "edit"), (2, "manual"), (3, "manual"), (4, "edit")]
+    assert all("skill" not in s and "url" not in s for s in steps)
     assert steps[3]["instructions"].startswith("Unassigned edits") and not steps[3]["implicit"]
     assert [e["step"] for e in plan["edits"]] == [1, 4]
     assert "_rawStep" not in plan["edits"][0]
     assert plan["missingInputs"] == ["the school code"]
-    assert plan["skillFeedback"] == ["facts-sis-reports: document GetGrades"]
     assert plan["stepStatus"] == {}
     w = " ".join(plan["warnings"])
-    assert "ghost-skill" in w and "1 edit(s) named no step" in w
+    assert "1 edit(s) named no step" in w
 
 
 def test_validate_plan_without_steps_gets_one_implicit_step(tmp_path):
@@ -542,7 +497,7 @@ def test_validate_plan_without_steps_gets_one_implicit_step(tmp_path):
     plan = validate_plan({"edits": [{"file": "lf.cfm", "folder": root, "oldStr": "beta", "newStr": "B", "why": ""}]},
                          en=enumerate_workspaces([root]), paths=[root], brief=BRIEF, report="")
     assert plan["steps"] == [{
-        "n": 1, "skill": None, "url": None, "kind": "edit", "instructions": "Apply the edits below.", "inputs": "",
+        "n": 1, "kind": "edit", "instructions": "Apply the edits below.", "inputs": "",
         "output": "1 edit(s) to workspace files",
         "verify": "Each edit's new text is in its file, and the old text is gone.", "implicit": True}]
     assert plan["edits"][0]["step"] == 1
@@ -557,7 +512,7 @@ def stepped_plan(root, en):
             {"file": "lf.cfm", "folder": root, "oldStr": "beta", "newStr": "beta gamma", "why": "", "step": 1},
             {"file": "crlf.cfm", "folder": root, "oldStr": "<td>GPA</td>", "newStr": "<td>W</td>", "why": "", "step": 3},
         ],
-    }, en=en, paths=[root], brief=BRIEF, report="", skills=SKILLS)
+    }, en=en, paths=[root], brief=BRIEF, report="")
     save_plan(plan)
     return plan
 
@@ -600,7 +555,7 @@ def test_apply_step_by_step(tmp_path, fixes):
     rep = fix_plan.final_report(plan["id"])
     md = rep["markdown"]
     assert rep["pending"] == [] and Path(rep["path"]).read_text(encoding="utf-8") == md
-    assert "1. [applied] (manual) edit lf" in md and "2. [done] (manual) deploy" in md
+    assert "1. [applied] (edit) edit lf" in md and "2. [done] (manual) deploy" in md
     assert "lf.cfm` (line 2)" in md and "Nothing was staged or committed" in md
     assert load_plan(plan["id"])["finishedAt"]
 
@@ -643,7 +598,7 @@ def test_revision_keeps_locked_steps_and_renumbers_the_rest(tmp_path, fixes):
                   {"n": 2, "instructions": "edit crlf differently"}],
         "edits": [{"file": "crlf.cfm", "folder": root, "oldStr": "<td>GPA</td>", "newStr": "<td>GPA (9-12)</td>",
                    "why": "", "step": 2}],
-    }, en=en, paths=[root], brief=BRIEF, report="", skills=SKILLS, prior=prior, feedback="grade bands are 9-12")
+    }, en=en, paths=[root], brief=BRIEF, report="", prior=prior, feedback="grade bands are 9-12")
 
     assert [(s["n"], s["kind"], s["instructions"]) for s in revised["steps"]] == [
         (1, "edit", "edit lf"), (2, "manual", "confirm grade bands"), (3, "edit", "edit crlf differently")]
@@ -775,7 +730,7 @@ def test_apply_creates_new_files_verifies_and_reports(tmp_path, fixes):
             create("PTA-FL/ProgressReport.htm", root, "<table></table>\n", 1),
             {"file": "lf.cfm", "folder": root, "oldStr": "beta", "newStr": "B", "why": "", "step": 2},
         ],
-    }, en=en, paths=[root], brief=BRIEF, report="", skills=SKILLS)
+    }, en=en, paths=[root], brief=BRIEF, report="")
     save_plan(plan)
     assert [e.get("create", False) for e in plan["edits"]] == [True, True, False]
 
@@ -837,14 +792,12 @@ def test_create_new_file_never_overwrites(tmp_path):
 # ---------------------------------------------------------------------------
 # Case info: which district
 # ---------------------------------------------------------------------------
-def test_fix_stdin_prints_case_codes_and_skill_assets(tmp_path):
+def test_fix_stdin_prints_case_codes(tmp_path):
     root = make_ws(tmp_path)
     brief = {**BRIEF, "account": "Praise Tab Academy",
              "codes": {"districtCode": "PTA-FL", "schoolCode": "PTA", "institutionId": "1234"},
              "info": [{"label": "Service", "value": "Custom Reports"}, {"label": "School Code", "value": "PTA"}]}
-    skills = [{**SKILLS[0], "assets": [{"path": "assets/skeleton.cfm", "content": "<!-- skeleton -->"}]}]
-    s = build_fix_stdin({"paths": [root], "enumeration": enumerate_workspaces([root]), "brief": brief, "skills": skills})
+    s = build_fix_stdin({"paths": [root], "enumeration": enumerate_workspaces([root]), "brief": brief})
     assert ("Account: Praise Tab Academy\nDistrict code: PTA-FL\nSchool code: PTA\nInstitution ID: 1234\n"
             "Service: Custom Reports\nOpened:") in s
-    assert "--- facts-sis-reports/assets/skeleton.cfm (a file of this skill) ---\n<!-- skeleton -->" in s
     assert "WHICH CLIENT:" in fix_plan.FIX_SYSTEM_PROMPT and "RULES FOR NEW FILES" in fix_plan.FIX_SYSTEM_PROMPT

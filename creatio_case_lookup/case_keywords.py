@@ -1,8 +1,7 @@
 """Turn a case brief into a short list of weighted search terms.
 
-Pure and deterministic — no model, no I/O. The terms drive two rankings:
-which workspace files are related to the case (case_files.py) and which
-team-wiki pages are (wiki_select.py).
+Pure and deterministic — no model, no I/O. The terms drive the ranking of
+which workspace files are related to the case (case_files.py).
 
 SANITIZED BY CONSTRUCTION: every term is lowercased, reduced to
 [a-z0-9 .#_-] and at most 40 characters, and there are at most MAX_TERMS of
@@ -25,7 +24,7 @@ MAX_TERMS = 20
 MAX_TERM_CHARS = 40
 TIMELINE_ENTRIES = 10
 
-# Domain phrases that always count, on top of the wiki's own page titles.
+# Domain phrases that always count.
 BUILTIN_PHRASES = [
     "report card",
     "progress report",
@@ -107,24 +106,6 @@ def sanitize_term(t: str) -> str:
     return normalize_text(t)[:MAX_TERM_CHARS].strip(" ")
 
 
-def vocabulary_from_titles(paths: list[str]) -> list[str]:
-    """Vocabulary taken from the wiki's page titles: every one- and two-word run in
-    a leaf title. Keeps the phrase list in step with what the team documents
-    (Canvas, Clever, OneRoster, GPA Calculator…) without a hard-coded list."""
-    out: dict[str, None] = {}  # insertion-ordered set
-    for p in paths:
-        title = p.split("/")[-1] or ""
-        words = [
-            w for w in sanitize_term(re.sub(r"[-_]", " ", title)).split(" ")
-            if len(w) > 2 and w not in STOPWORDS
-        ]
-        for i, w in enumerate(words):
-            out[w] = None
-            if i + 1 < len(words):
-                out[f"{w} {words[i + 1]}"] = None
-    return list(out)
-
-
 _ALNUM = frozenset("abcdefghijklmnopqrstuvwxyz0123456789")
 
 
@@ -164,7 +145,7 @@ _CODE_RE = re.compile(r"\b([A-Z]{2,6}-[A-Z]{2,6})\b", re.ASCII)
 _FILE_RE = re.compile(r"\b([\w-]{2,60}\.(?:cfm|cfc|htm|html|sql|js|css|xml))\b", re.ASCII | re.IGNORECASE)
 
 
-def extract_case_terms(brief: dict[str, Any], vocabulary: list[str] | None = None) -> list[dict]:
+def extract_case_terms(brief: dict[str, Any]) -> list[dict]:
     """Extract weighted terms from a brief.
 
     Sources and weights: subject ×3, description ×2, the latest timeline entries
@@ -172,7 +153,6 @@ def extract_case_terms(brief: dict[str, Any], vocabulary: list[str] | None = Non
     ("ReportCard.cfm") are the strongest signals a case carries, so they get a
     fixed high weight whenever they appear anywhere.
     """
-    vocabulary = vocabulary or []
     timeline = brief.get("timeline") or []
     tl = [trim_reply((t or {}).get("text", "")) for t in timeline[-TIMELINE_ENTRIES:]]
     sources: list[tuple[str, float]] = [
@@ -220,8 +200,8 @@ def extract_case_terms(brief: dict[str, Any], vocabulary: list[str] | None = Non
         for part in re.split(r"[-_.]", m.group(1).lower()):
             fragments.add(part)
 
-    # Phrases: built-ins plus the wiki vocabulary.
-    phrases = [p for p in dict.fromkeys([*BUILTIN_PHRASES, *(sanitize_term(v) for v in vocabulary)]) if len(p) > 2]
+    # Phrases: the built-in domain phrases.
+    phrases = [p for p in dict.fromkeys(BUILTIN_PHRASES) if len(p) > 2]
     # A one-word phrase is already scored as a phrase — don't count it again as a word.
     phrase_words = {p for p in phrases if " " not in p}
     for text, w in sources:

@@ -1,7 +1,7 @@
 """workspace_cli.py — argv parsing, each command's happy path and its error exits.
 
-Everything runs against a tmp `.env` and a tmp `.analysis/` store; Creatio and
-the Azure DevOps wiki are stubbed, so nothing touches the network.
+Everything runs against a tmp `.env` and a tmp `.analysis/` store; Creatio is
+stubbed, so nothing touches the network.
 """
 
 import io
@@ -14,10 +14,9 @@ import zlib
 
 import pytest
 
-from creatio_case_lookup import ado_wiki, case_brief, case_scope, creatio_client, env, paths
+from creatio_case_lookup import case_brief, creatio_client, env, paths
 from creatio_case_lookup import workspace as ws
 from creatio_case_lookup import workspace_cli as cli
-from creatio_case_lookup.ado_wiki import WikiUnavailable
 
 
 @pytest.fixture
@@ -30,9 +29,6 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(ws, "ANALYSIS_DIR", store)
     monkeypatch.setattr(ws, "INDEX_PATH", store / "index.json")
     monkeypatch.setattr(case_brief, "CASES_DIR", store / "cases")
-    monkeypatch.setattr(ado_wiki, "WIKI_DIR", store / "wiki")
-    monkeypatch.setattr(ado_wiki, "TREE_PATH", store / "wiki" / "tree.json")
-    monkeypatch.setattr(ado_wiki, "PAGES_DIR", store / "wiki" / "pages")
     proj = tmp_path / "proj"
     proj.mkdir()
     (proj / "a.cfm").write_text("<cfoutput>report card gpa</cfoutput>\n", encoding="utf-8")
@@ -93,9 +89,9 @@ def test_parse_args_matches_ts_semantics():
     a = cli.parse_args(["x", "--path", "A", "--over-cap", "--path", "B", "--model", "m", "y", "--flag"])
     assert a == {"positional": ["x", "y"], "flags": {"over-cap": True, "model": "m", "flag": True}, "paths": ["A", "B"]}
     # A value-less --path (followed by another flag) is a boolean flag, not a path.
-    assert cli.parse_args(["--path", "--no-wiki"]) == {"positional": [], "flags": {"path": True, "no-wiki": True}, "paths": []}
+    assert cli.parse_args(["--path", "--over-cap"]) == {"positional": [], "flags": {"path": True, "over-cap": True}, "paths": []}
     # A boolean-looking flag still swallows a following non-flag token.
-    assert cli.parse_args(["--no-wiki", "SR1"])["flags"] == {"no-wiki": "SR1"}
+    assert cli.parse_args(["--over-cap", "SR1"])["flags"] == {"over-cap": "SR1"}
 
 
 # ---------------------------------------------------------------------------
@@ -314,27 +310,22 @@ def test_attachment_errors(sandbox, monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_scope_no_wiki(sandbox, monkeypatch, capsys):
+def test_scope(sandbox, monkeypatch, capsys):
     case_brief.save_brief(_brief())
-    code, o, _ = run(monkeypatch, capsys, "scope", "SR00012345", "--path", sandbox["proj"], "--no-wiki")
+    code, o, _ = run(monkeypatch, capsys, "scope", "SR00012345", "--path", sandbox["proj"])
     assert code == 0
     assert o["caseNumber"] == "SR00012345"
-    assert o["wikiSkipped"] == "Team wiki lookup was not requested." and o["wiki"] == []
+    assert list(o) == ["caseNumber", "terms", "files", "searched", "searchTruncated", "cap", "durationMs"]
     assert any(t["term"] == "a.cfm" or t["term"] == "gpa" for t in o["terms"])
     assert o["files"] and o["files"][0]["rel"] == "a.cfm"
 
 
-def test_scope_wiki_unavailable_is_skipped_not_fatal(sandbox, monkeypatch, capsys):
+def test_scope_uses_the_bound_case_and_saved_workspace(sandbox, monkeypatch, capsys):
     case_brief.save_brief(_brief())
     case_brief.set_bound_case("SR00012345")
     ws.set_workspace_paths([sandbox["proj"]])
-
-    async def no_wiki(refresh=False):
-        raise WikiUnavailable("Azure CLI isn't logged in.", "auth")
-
-    monkeypatch.setattr(case_scope, "get_wiki_tree", no_wiki)
     code, o, _ = run(monkeypatch, capsys, "scope")
-    assert code == 0 and o["wikiSkipped"] == "Azure CLI isn't logged in."
+    assert code == 0 and o["caseNumber"] == "SR00012345"
 
 
 def test_scope_errors(sandbox, monkeypatch, capsys):
@@ -347,52 +338,3 @@ def test_scope_errors(sandbox, monkeypatch, capsys):
     case_brief.save_brief(_brief())
     code, _, err = run(monkeypatch, capsys, "scope", "SR00012345")
     assert code == 2 and err.startswith("No workspace folder set.")
-
-
-# ---------------------------------------------------------------------------
-# wiki
-# ---------------------------------------------------------------------------
-
-
-def test_wiki_search_and_page(sandbox, monkeypatch, capsys):
-    tree = [
-        {"path": "/Reports/Report Card GPA", "section": False},
-        {"path": "/Reports/Transcripts", "section": False},
-        {"path": "/Other", "section": True},
-    ]
-
-    async def fake_tree(refresh=False):
-        return tree
-
-    async def fake_page(path, refresh=False):
-        return {"path": path, "url": "https://x/" + path, "content": "hello"}
-
-    monkeypatch.setattr(cli, "get_wiki_tree", fake_tree)
-    monkeypatch.setattr(cli, "get_wiki_page", fake_page)
-
-    code, o, _ = run(monkeypatch, capsys, "wiki", "search", "Report", "Card!", "GPA")
-    assert code == 0 and o["pages"] == 3
-    assert o["matches"] and o["matches"][0]["path"] == "/Reports/Report Card GPA"
-
-    code, o, _ = run(monkeypatch, capsys, "wiki", "page", "/Reports/Report", "Card", "GPA")
-    assert code == 0 and o["path"] == "/Reports/Report Card GPA" and o["content"] == "hello"
-
-
-def test_wiki_errors(sandbox, monkeypatch, capsys):
-    for argv in (["wiki"], ["wiki", "search"], ["wiki", "page"], ["wiki", "nope", "x"]):
-        code, _, err = run(monkeypatch, capsys, *argv)
-        assert code == 1 and err == "Usage: python -m creatio_case_lookup.workspace_cli wiki search <terms...> | python -m creatio_case_lookup.workspace_cli wiki page <path>\n"
-
-    async def unavailable(*a, **k):
-        raise WikiUnavailable("The team wiki returned HTTP 404.", "http")
-
-    monkeypatch.setattr(cli, "get_wiki_page", unavailable)
-    code, _, err = run(monkeypatch, capsys, "wiki", "page", "/x")
-    assert code == 4 and err == "The team wiki returned HTTP 404.\n"
-
-    async def crash(*a, **k):
-        raise ValueError("boom")
-
-    monkeypatch.setattr(cli, "get_wiki_tree", crash)
-    code, _, err = run(monkeypatch, capsys, "wiki", "search", "x")
-    assert code == 1 and err == "boom\n"

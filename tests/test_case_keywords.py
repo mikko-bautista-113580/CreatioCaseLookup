@@ -5,7 +5,6 @@ from creatio_case_lookup.case_keywords import (
     extract_case_terms,
     sanitize_term,
     trim_reply,
-    vocabulary_from_titles,
 )
 
 
@@ -59,14 +58,6 @@ def test_terms_are_sanitized_to_a_safe_token_alphabet():
 
 def test_trim_reply_cuts_at_the_first_reply_marker():
     assert trim_reply("hello\nOn Mon, Jan 1, 2026 Bob wrote:\nold").strip() == "hello"
-
-
-def test_wiki_titles_become_vocabulary():
-    v = vocabulary_from_titles(["/Training Resources/Custom Transcripts/GPA Calculator", "/Integrations/Canvas/Canvas Sync Errors"])
-    assert "gpa calculator" in v
-    assert "canvas sync" in v
-    terms = extract_case_terms(brief(subject="Canvas sync is failing"), v)
-    assert any(t["term"] == "canvas sync" and t["kind"] == "phrase" for t in terms)
 
 
 def test_count_term_hits_matches_the_consuming_regex():

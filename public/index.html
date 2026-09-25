@@ -139,7 +139,7 @@
           the includes it pulls in). Saved to the app's <code>.env</code>, effective
           immediately with no restart. <strong>Analyze</strong> reads only the files
           related to the bound case — found in subfolders too, using its district and
-          school codes and keywords — plus the matching Custom Team wiki pages. It is
+          school codes and keywords. It is
           <strong>read-only</strong>: Claude may read, glob and grep these folders, and
           can neither edit files nor run commands.
         </p>
@@ -172,7 +172,7 @@
         </p>
       </section>
 
-      <!-- What a case-scoped analysis reads: files with reasons + wiki pages. -->
+      <!-- What a case-scoped analysis reads: files with reasons. -->
       <section id="wsScope" class="card hidden"></section>
 
       <!-- Live streaming analysis -->
@@ -259,36 +259,6 @@
           <button id="saveCfgBtn" class="primary">Save</button>
           <button id="testCfgBtn" class="secondary">Test connection</button>
           <span id="cfgStatus" class="status"></span>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>Team wiki</h2>
-        <p class="hint">
-          Case-scoped analyses pull matching pages from the Custom Team wiki in Azure
-          DevOps, using your <strong>Azure CLI</strong> login (<code>az login</code>) — no
-          token is stored. Change the wiki with <code>ADO_WIKI_ORG</code>,
-          <code>ADO_WIKI_PROJECT</code> and <code>ADO_WIKI_ID</code> in <code>.env</code>, or
-          turn it off with <code>CREATIO_WIKI_ENABLED=false</code>.
-        </p>
-        <div class="actions">
-          <button id="testWikiBtn" class="secondary">Test wiki connection</button>
-          <span id="wikiStatus" class="status"></span>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>Team skills</h2>
-        <p class="hint">
-          Fix plans are built from the team's skills — <code>/Skills/&lt;name&gt;/SKILL.md</code>
-          in the Custom-Team repo — read through the same <strong>Azure CLI</strong> login.
-          Change the source with <code>ADO_SKILLS_REPO</code>, <code>ADO_SKILLS_PATH</code> and
-          <code>ADO_SKILLS_BRANCH</code> in <code>.env</code>, or turn it off with
-          <code>CREATIO_SKILLS_ENABLED=false</code>.
-        </p>
-        <div class="actions">
-          <button id="testSkillsBtn" class="secondary">Test skills repo</button>
-          <span id="skillsStatus" class="status"></span>
         </div>
       </section>
     </main>

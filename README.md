@@ -19,7 +19,7 @@ Everything is read-only by construction: the HTTP layer only ever issues `GET`, 
 - 🧵 **Rich case detail** — HTML-stripped descriptions, merged **feed + email timeline**, and **inline screenshots/attachments** proxied from Creatio's FileService.
 - ✨ **AI analysis (optional)** — Summarize & prioritize, Common themes, Next actions, or free-text Q&A over the loaded cases; streamed live via the local Claude CLI (uses your existing Claude login — no API key).
 - 📂 **Workspace analysis** — point the app at up to **3 folders** you're working in and get a **read-only** code analysis of them together, capped at 10 top-level files so it stays fast. Reports are stored under `.analysis/` and reused by the bundled skills.
-- 🎯 **Case-scoped analysis** — with a case bound, **Analyze for SRxxxxxxxx** reads only the files related to that case (searched in subfolders too, ranked by the case's keywords and school code) plus the matching pages from the **Custom Team wiki** in Azure DevOps, so the fix follows the team's documented standards.
+- 🎯 **Case-scoped analysis** — with a case bound, **Analyze for SRxxxxxxxx** reads only the files related to that case (searched in subfolders too, ranked by the case's keywords and school code), so a fix starts from the right handful of files instead of the whole folder.
 - 🧩 **Case → code → fix** — the Workspace tab runs in three phases: pick the **case**, point at the **folders**, then **Plan the fix**. You get every change as a before/after diff; nothing is written until you press Apply, and applied edits are left **uncommitted** for review.
 - ⚙️ **In-app settings** — paste/refresh SSO cookies, base URL, allowlist, row cap; no VS Code required.
 - 📡 **Live progress** — the search streams per-case progress with a percentage bar.
@@ -36,9 +36,7 @@ creatio_case_lookup/
   case_brief.py        Bound case + stored case brief (.analysis/cases/)
   case_keywords.py     Case text -> sanitized, weighted search terms
   case_files.py        Recursive search + ranking of the files related to a case
-  ado_wiki.py          Read-only Azure DevOps wiki client (Azure CLI login)
-  wiki_select.py       Picks the wiki pages that match a case
-  case_scope.py        Keywords + related files + wiki pages for one case
+  case_scope.py        Keywords + related files for one case
   fix_plan.py          Fix planning (read-only) + reviewed apply (plain Python)
   analyze_workspace.py Read-only workspace analysis (Read/Glob/Grep only)
   workspace_cli.py     CLI over the workspace store, used by the skills
@@ -61,7 +59,6 @@ start-app.bat        One-click launcher for the web app (Windows)
 
 - **Python 3.12+**.
 - **Claude CLI** (optional, for the AI features): `npm i -g @anthropic-ai/claude-code`, then run `claude` once to sign in.
-- **Azure CLI** (optional, for team-wiki references in case-scoped analyses): install it, then run `az login` with an account that can read the Custom Team wiki.
 
 ```bash
 git clone <your-repo-url> creatio-case-toolkit
@@ -110,10 +107,6 @@ All settings live in `.env` — the MCP server loads it from the project root it
 | `CREATIO_WORKSPACE_TIMEOUT_MS` | Hard timeout for one workspace analysis (default 300000) |
 | `CREATIO_WORKSPACE_CASE` | The case bound in the Workspace tab's phase 1 (normally set from the UI) |
 | `CREATIO_FIX_TIMEOUT_MS` | Hard timeout for one fix-planning run (default 600000) |
-| `ADO_WIKI_ORG` / `ADO_WIKI_PROJECT` / `ADO_WIKI_ID` | The team wiki case-scoped analyses read (default `renweb` / `Custom Development` / `Custom-Team.wiki`), via your `az login` |
-| `CREATIO_WIKI_ENABLED` / `CREATIO_WIKI_MAX_PAGES` | Turn the wiki lookup off (`false`), and how many pages feed one case (default 4) |
-| `ADO_SKILLS_REPO` / `ADO_SKILLS_PATH` / `ADO_SKILLS_BRANCH` | Where fix plans read the team skills from (default the `Custom-Team` repo, `/Skills`, default branch; org/project follow the wiki's), via your `az login` |
-| `CREATIO_SKILLS_ENABLED` / `CREATIO_SKILLS_MAX_FULL` | Turn the skills lookup off (`false`), and how many best-matching skills the planner gets in full (default 4) |
 
 ### Authentication
 
@@ -131,7 +124,7 @@ Verify either mode with `.venv\Scripts\python -m creatio_case_lookup.test_auth`.
 - **Lookup tab** — choose *who* (assignee / case number / account / all recent), *which statuses*, and *how much detail* (summary, full description, timeline, latest update, extra fields), then **Search**. Results stream in with a progress bar.
 - **Attachments** — screenshots embedded in descriptions and feed posts render **inline** (click to enlarge); email attachments appear as thumbnails. Images are streamed through a read-only `/api/file` proxy restricted to file entities + GUID ids.
 - **Workspace tab** — three phases: **1** pick the case you're working on, **2** point at the folder(s) and run a read-only analysis, **3** plan a fix, review every edit as a diff, and apply it (see below).
-- **Settings tab** — base URL, cookies, allowlist, row cap, plus **Test connection**, and **Test wiki connection** for the Azure CLI login the team wiki uses.
+- **Settings tab** — base URL, cookies, allowlist, row cap, plus **Test connection**.
 
 The server binds to `127.0.0.1` only. Inside this repo it writes your local `.env` (Settings, Workspace path, bound case) and `.analysis/` (workspace reports, case briefs, fix plans and pre-edit backups). The only time it writes **outside** this repo is when you press **Apply** on a fix plan you have reviewed — never during an analysis, and never without that approval.
 
@@ -153,17 +146,16 @@ The **Workspace tab** takes the absolute path of the folder you're working in �
 - **Excluded automatically:** secret-bearing files (`.env`, keys, certs — counted but never listed), files over 512 KB, non-text files, and the usual build/dependency directories.
 - **Stored** as `.analysis/<slug>/analysis.md` plus a JSON sidecar (files analyzed, tool calls, model, cost, `truncated` flag), indexed in `.analysis/index.json`. The folder is **git-ignored local state** — safe to delete.
 
-### Case-scoped analysis and the team wiki
+### Case-scoped analysis
 
 With a case bound in phase 1, the button reads **Analyze for SRxxxxxxxx** and analyzes only what that case touches — which is usually a handful of files in a folder of thousands.
 
 - **Finding the related files — fast and model-free.** The app turns the case's subject, description and recent emails into a short list of keywords (school codes like `EP-JAM` and file names like `EP-JAM-RC.cfm` weigh the most), then searches the folders **recursively**. A folder named after the school code is walked first; files are ranked by path and content matches, with words that appear in almost every file (like "report") counting for little; one hop of `<cfinclude>` is followed; and anything scoring well below the best match is dropped. The result is capped at the file limit, so there is no over-cap prompt in this mode. On a reports root of 1,700+ school folders this picks the right school's files in a few seconds.
-- **Preview first.** **Preview related files** shows the chosen files (with why each was picked) and the wiki pages — without running Claude. **Analyze whole folder instead** keeps the classic analysis one click away.
-- **Team wiki references.** The same keywords pick up to 4 pages from the **Custom Team wiki** in Azure DevOps (report-card variables, workflows, policies, integration guides). They're read through your **Azure CLI login** — no token is stored — and cached for 24 hours under `.analysis/wiki/`. The analysis gets a **"Case relevance"** section that says what the wiki prescribes and where the code departs from it, and the fix plan lists the pages it relied on as links. If `az` is missing or logged out, the analysis still runs and says the wiki was skipped.
+- **Preview first.** **Preview related files** shows the chosen files (with why each was picked) — without running Claude. **Analyze whole folder instead** keeps the classic analysis one click away.
 - **What the analysis receives from the case.** Only the app-extracted keywords (lowercased, reduced to a safe alphabet, max 40 characters each) and the file list the app picked — never the client's wording. The fix plan, as before, does read the case text, with no write tools.
-- **Stored** as `.analysis/<slug>/cases/<SR>.md` plus sidecar (selected files, reasons, wiki pages). It goes stale when a selected file changes or the case is re-fetched.
+- **Stored** as `.analysis/<slug>/cases/<SR>.md` plus sidecar (selected files and reasons). It goes stale when a selected file changes or the case is re-fetched.
 
-The skills use the same logic: `python -m creatio_case_lookup.workspace_cli scope <SR>` prints the keywords, related files and wiki pages; `wiki search <terms>` and `wiki page "<path>"` query the wiki directly.
+The skills use the same logic: `python -m creatio_case_lookup.workspace_cli scope <SR>` prints the keywords and related files.
 
 > **Accepted limitation:** because the analysis child runs *in* your folder, that folder's own `CLAUDE.md` is loaded into its context and cannot be suppressed by any current flag. The folder is one you chose, and `--tools` bounds the worst case to "read files here and write a misleading report" — but if you analyze a directory you don't trust, read the report with that in mind.
 
@@ -179,7 +171,7 @@ The Workspace tab is **case-first**, because that's how the work actually arrive
 
    > That save is the only write outside this repo besides an approved fix apply, so it is narrow: **images only** (no `.svg` — it can carry script), the bytes must actually *be* that image type (leading bytes are checked, so client-supplied content named `logo.png` is rejected and a JPEG can't be saved as `.png`), the target must be a configured folder, the client-supplied name is reduced to a bare filename, 10 MB cap, and replacing an existing file needs a second confirm and copies the original to `.analysis/assets/` first. Listing them needs `CaseFile` in `CREATIO_ALLOWED_ENTITIES`; without it the brief records a caveat instead of failing. **Their contents are not read when planning a fix** — the planner is given the filenames only, so a logo's exact colours still have to come from the case text.
 2. **Working directory** — the folders and their read-only analysis, as described above: case-scoped when a case is bound, whole-folder otherwise.
-3. **Fix** — press **Plan the fix**. A read-only pass reads the case, the stored analysis (the case-scoped one when it exists), the matching wiki pages and the relevant files, then shows you each proposed change as a **before/after diff** with its reasoning, risks and what it does *not* fix. Nothing has touched disk at this point. Press **Apply** and the edits are written and left **uncommitted and unstaged** so you review the diff yourself. Originals are backed up first, so it's reversible even outside git.
+3. **Fix** — press **Plan the fix**. A read-only pass reads the case, the stored analysis (the case-scoped one when it exists) and the relevant files, then shows you each proposed change as a **before/after diff** with its reasoning, risks and what it does *not* fix. Nothing has touched disk at this point. Press **Apply** and the edits are written and left **uncommitted and unstaged** so you review the diff yourself. Originals are backed up first, so it's reversible even outside git.
 
    The review also breaks the case into **what the client actually asked for** — using the case's own numbering where it has any — marks each ask *addressed*, *partly addressed* or *not addressed*, and tags every edit with the ask it serves. So you can check the plan against the client's email rather than inferring intent from a diff, and see at a glance which parts were left alone.
 
@@ -205,7 +197,7 @@ Three skills in `.claude/skills/` drive these workflows from a Claude Code conve
 |---|---|
 | `creatio-case-lookup` | Interactive case lookup — who, which statuses, how much detail |
 | `workspace-analysis` | Analyzes the working folder(s) and stores the report (same 10-file total cap and over-cap prompt as the tab); with a case bound, points you at the case scope instead |
-| `creatio-case-fix` | Reads a case's description + conversation, loads the case-scoped analysis (or computes the case scope: related files + wiki pages), recommends a fix citing the wiki pages it follows, and — **only after you approve** — applies the edits and leaves them **uncommitted** for review |
+| `creatio-case-fix` | Reads a case's description + conversation, loads the case-scoped analysis (or computes the case scope: related files), recommends a fix, and — **only after you approve** — applies the edits and leaves them **uncommitted** for review |
 
 The skills and the app share one implementation of the cap rule and the artifact schema via `python -m creatio_case_lookup.workspace_cli`, so reports from either side are interchangeable.
 
@@ -248,7 +240,6 @@ Requires the project's `.venv` (see Quick start). Anything set in an `env` block
 - **Local & single-user:** the web app binds to `127.0.0.1`, with no app-level auth by design.
 - **Secrets stay local:** cookies/credentials live in `.env` (git-ignored) and are masked in the UI; AI analysis receives only case **text**, never cookies.
 - **Bounded reach:** entity allowlist + `$top` clamp; the file proxy is limited to a fixed set of file entities and GUID ids.
-- **Wiki access is read-only and token-free:** team-wiki pages are fetched with a short-lived token from your own `az login`, over GET only; nothing is stored but the cached page text under `.analysis/wiki/`.
 - **Workspace analysis is read-only too:** the analysis child gets `--tools Read,Glob,Grep`, which removes `Edit`/`Write`/`Bash` from its tool *schema*, plus deny rules for `.env`, keys and certificates. `--safe-mode` and `--setting-sources user` stop the analyzed folder's own `.claude/settings.json` hooks from running. Every tool call is recorded in the report sidecar.
 - **Applying fixes is gated on you:** both routes — the Workspace tab's **Plan the fix** and the `creatio-case-fix` skill — propose a change, wait for explicit approval, and leave the edits **uncommitted**. Nothing is ever committed, staged or pushed for you.
 - **The model that reads case text never holds a write tool:** planning runs with `--tools Read,Glob,Grep` and no `Bash`/`WebFetch`/`WebSearch`, and returns a structured edit list. The app applies it, re-verifying that every target is a top-level source file of a configured folder (or a file the case-scoped analysis selected inside one) and that each "before" string still matches exactly once. Apply is all-or-nothing, and originals are backed up under `.analysis/fixes/`.
@@ -275,8 +266,8 @@ Run each with `.venv\Scripts\python -m <module>`:
 | `creatio_case_lookup.server` | Start the web app |
 | `creatio_case_lookup.mcp_server` | Start the MCP server (stdio) |
 | `creatio_case_lookup.test_auth` | Verify credentials without starting anything |
-| `creatio_case_lookup.workspace_cli` | Workspace store CLI (`path` / `scan` / `load` / `save` / `case` / `attachment` / `scope` / `wiki`) — used by the skills |
-| `pytest` | Run the test suite (`.venv\Scripts\python -m pytest`) — no network, Creatio, `az` or Claude needed |
+| `creatio_case_lookup.workspace_cli` | Workspace store CLI (`path` / `scan` / `load` / `save` / `case` / `attachment` / `scope`) — used by the skills |
+| `pytest` | Run the test suite (`.venv\Scripts\python -m pytest`) — no network, Creatio or Claude needed |
 
 ## Development
 

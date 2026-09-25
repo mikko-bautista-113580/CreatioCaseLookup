@@ -84,7 +84,7 @@ const state = {
     plan: null,
     planning: false,
     planAbort: null,
-    // The bound case's scoped analysis (files + wiki pages), when one is stored.
+    // The bound case's scoped analysis (related files), when one is stored.
     caseAnalysis: null,
   },
 };
@@ -1063,37 +1063,6 @@ async function testConn() {
 }
 $("#testCfgBtn").addEventListener("click", testConn);
 
-async function testWikiConn() {
-  const s = $("#wikiStatus");
-  s.innerHTML = '<span class="spinner"></span> Checking the Azure CLI login…';
-  s.className = "status";
-  try {
-    const r = await api("/api/wiki/test");
-    s.textContent = r.message;
-    s.className = "status " + (r.ok ? "ok" : "err");
-  } catch (e) {
-    s.textContent = e.message;
-    s.className = "status err";
-  }
-}
-$("#testWikiBtn").addEventListener("click", testWikiConn);
-
-async function testSkillsConn() {
-  const s = $("#skillsStatus");
-  s.innerHTML = '<span class="spinner"></span> Reading the skills repo…';
-  s.className = "status";
-  try {
-    const r = await api("/api/skills/test");
-    s.textContent = r.message;
-    s.className = "status " + (r.ok ? "ok" : "err");
-    // The probe refreshed the server's cache; let phase 3 pick it up.
-    state.ws.skillsInfo = undefined;
-  } catch (e) {
-    s.textContent = e.message;
-    s.className = "status err";
-  }
-}
-$("#testSkillsBtn").addEventListener("click", testSkillsConn);
 
 // Interactive browser login — opens a real browser at Creatio's login page and
 // captures the session cookies when the user finishes signing in. Progress
@@ -1429,12 +1398,9 @@ function renderStored(analysis, stale, caseAnalysis) {
 
   const rows = [];
   if (ca) {
-    const w = ca.wikiPages.length;
     rows.push(
       `<li><button class="link" data-ws-open="case">For ${esc(ca.caseNumber)}</button>
-         <span class="muted">· ${fmtDate(ca.finishedAt)} · ${ca.files.length} related file${ca.files.length === 1 ? "" : "s"} · ${
-           w ? `${w} wiki page${w === 1 ? "" : "s"}` : "no wiki pages"
-         }${ca.truncated ? " · ⚠ partial" : ""}${ca.stale ? " · ⚠ changed since" : ""}</span></li>`
+         <span class="muted">· ${fmtDate(ca.finishedAt)} · ${ca.files.length} related file${ca.files.length === 1 ? "" : "s"}${ca.truncated ? " · ⚠ partial" : ""}${ca.stale ? " · ⚠ changed since" : ""}</span></li>`
     );
   }
 
@@ -1616,7 +1582,7 @@ function updateAnalyzeControls() {
   $("#wsCaseModeText").innerHTML = on
     ? `<strong>Analyze</strong> reads only the files related to ${esc(state.ws.case.number)}${
         code ? ` — the <code>${esc(code)}</code> folder first` : ""
-      } (subfolders included) plus the matching Custom Team wiki pages.`
+      } (subfolders included).`
     : "Pick a case in phase 1 first — analysis reads the files related to it.";
   $("#wsPreviewScopeBtn").classList.toggle("hidden", !on || !state.ws.paths.length);
   if (!on) {
@@ -1625,7 +1591,7 @@ function updateAnalyzeControls() {
   }
 }
 
-/** Render what a case-scoped analysis reads: files with reasons + wiki pages. */
+/** Render what a case-scoped analysis reads: files with reasons. */
 function renderScope(sc) {
   const box = $("#wsScope");
   box.classList.remove("hidden");
@@ -1640,29 +1606,19 @@ function renderScope(sc) {
         )
         .join("")}</ol>`
     : `<p class="caveat">No files matched this case's keywords.</p>`;
-  const wiki = (sc.wiki || []).length
-    ? `<ul class="ws-scope-wiki">${sc.wiki
-        .map(
-          (w) => `<li><a href="${esc(w.url)}" target="_blank" rel="noopener">${esc(w.path)}</a>
-                   <span class="muted">· ${esc(w.why)}</span></li>`
-        )
-        .join("")}</ul>`
-    : `<p class="hint">${esc(sc.wikiSkipped || "No wiki pages matched.")}</p>`;
   box.innerHTML = `
     <h2>Case scope <span class="muted">· ${esc(sc.caseNumber || state.ws.case.number)}</span></h2>
     <p class="hint">Keywords: ${terms || "none found"}</p>
     <h3>Related files <span class="muted">· ${(sc.files || []).length} of ${sc.searched} searched${
       sc.searchTruncated ? " · ⚠ search stopped early" : ""
     } · cap ${sc.cap}</span></h3>
-    ${files}
-    <h3>Team wiki</h3>
-    ${wiki}`;
+    ${files}`;
 }
 
 async function previewScope() {
   const box = $("#wsScope");
   box.classList.remove("hidden");
-  box.innerHTML = '<p class="hint"><span class="spinner"></span> Finding related files and wiki pages…</p>';
+  box.innerHTML = '<p class="hint"><span class="spinner"></span> Finding related files…</p>';
   try {
     renderScope(await api("/api/workspace/case-scope"));
   } catch (e) {
@@ -2340,41 +2296,12 @@ function renderCaseBrief() {
 // ---------------------------------------------------------------------------
 // Workspace · phase 3: readiness checklist
 //
-// Phase 3 plans a fix from the case, the stored analysis and the team's skills
-// (the Custom-Team repo's /Skills), then runs it one step at a time. The
+// Phase 3 plans a fix from the case and the stored analysis, then runs it one
+// step at a time. The
 // planning pass is read-only; each step's edits are written by the server only
 // when you press that step's Apply, re-verified first, and left uncommitted.
 // ---------------------------------------------------------------------------
 
-/** Which team skills a plan will be given — loaded once, from the server's 24h cache. */
-async function loadSkillsInfo() {
-  if (state.ws.skillsInfo !== undefined) return;
-  state.ws.skillsInfo = null; // in flight
-  try {
-    state.ws.skillsInfo = await api("/api/skills");
-  } catch (e) {
-    state.ws.skillsInfo = { ok: false, skills: [], message: e.message };
-  }
-  renderHandoff();
-}
-
-function skillsRow() {
-  const info = state.ws.skillsInfo;
-  if (!info) return { ok: true, cls: "info", html: `Team skills <span class="muted">(checking the Custom-Team repo…)</span>` };
-  if (!info.ok) {
-    return {
-      ok: true,
-      cls: "warn",
-      html: `Team skills unavailable <span class="muted">— ${esc(info.message || "unknown error")} The fix can still be planned without them.</span>`,
-    };
-  }
-  const n = info.skills.length;
-  return {
-    ok: true,
-    cls: "ok",
-    html: `${n} team skill${n === 1 ? "" : "s"} from the Custom-Team repo <span class="muted">(the plan picks the ones that fit the case)</span>`,
-  };
-}
 /**
  * One line describing the stored plan, with a link to open it.
  *
@@ -2437,7 +2364,7 @@ function renderHandoff() {
     const label = ca
       ? `Case analysis for ${esc(ca.caseNumber)} <span class="muted">(${ca.files.length} related file${
           ca.files.length === 1 ? "" : "s"
-        }, ${ca.wikiPages.length} wiki page${ca.wikiPages.length === 1 ? "" : "s"})</span>`
+        })</span>`
       : `Stored analysis`;
     items.push({
       ok: true,
@@ -2455,15 +2382,11 @@ function renderHandoff() {
   }
 
   const ready = !!number && paths.length > 0 && hasAnalysis;
-  // Informational only: skills shape the plan but never block it.
-  items.push(skillsRow());
-  loadSkillsInfo();
 
   box.innerHTML = `
     <h2><span class="ws-step">3</span> Fix</h2>
     <p class="hint">
-      Reads the case, the stored analysis and the <strong>team skills</strong>, picks the
-      skills that fit, and writes a numbered plan showing every edit as
+      Reads the case and the stored analysis, and writes a numbered plan showing every edit as
       <strong>before/after</strong>. You then run it one step at a time: nothing touches
       your files until you press a step's Apply, each step is verified before the next
       unlocks, and applied edits are left <strong>uncommitted</strong> so you review the diff yourself.
@@ -2475,7 +2398,7 @@ function renderHandoff() {
       ready
         ? `<div class="row wrap ws-fix-row">
              <button id="wsPlanBtn" class="primary">Plan the fix</button>
-             <span class="muted">reads the case, the team skills and your code, then shows the plan for approval</span>
+             <span class="muted">reads the case and your code, then shows the plan for approval</span>
            </div>
            ${lastPlanLine()}`
         : `<p class="hint">Finish the steps above and the fix button appears here.</p>`
@@ -2569,21 +2492,6 @@ async function runFixPlan(revise = null) {
             })`
           : "no stored analysis — orienting from the files directly";
         activity.appendChild(src);
-        if ((d.wikiPages || []).length) {
-          const w = document.createElement("li");
-          w.className = "ws-source";
-          w.textContent = `with ${d.wikiPages.length} team wiki page${d.wikiPages.length === 1 ? "" : "s"}: ${d.wikiPages
-            .map((p) => p.path.split("/").pop())
-            .join(", ")}`;
-          activity.appendChild(w);
-        }
-        const sk = document.createElement("li");
-        sk.className = "ws-source";
-        const full = (d.skills || []).filter((s) => s.full);
-        sk.textContent = (d.skills || []).length
-          ? `with ${d.skills.length} team skills${full.length ? `, full text of ${full.map((s) => s.name).join(", ")}` : ""}`
-          : `without team skills${d.skillsWarning ? ` — ${d.skillsWarning}` : ""}`;
-        activity.appendChild(sk);
         if (d.revising) {
           const rv = document.createElement("li");
           rv.className = "ws-source";
@@ -2677,18 +2585,6 @@ async function runFixPlan(revise = null) {
  * matches the file on disk, because that — plus this review and the pre-write
  * backup — is what makes applying safe.
  */
-/** The team-wiki pages behind a plan: the ones it cited, else the ones it was given. */
-function wikiRefsHtml(plan) {
-  const pages = plan.wikiPages || [];
-  if (!pages.length) return "";
-  const cited = new Set(plan.references || []);
-  const shown = cited.size ? pages.filter((p) => cited.has(p.path)) : pages;
-  const label = cited.size ? "Based on the team wiki:" : "Team wiki pages it was given (none cited):";
-  return `<div class="ws-plan-note"><strong>${label}</strong> ${shown
-    .map((p) => `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.path)}</a>`)
-    .join(" · ")}</div>`;
-}
-
 function renderFixPlan(plan, planError, incomplete) {
   const box = $("#wsFixPlan");
 
@@ -2827,8 +2723,7 @@ function renderFixPlan(plan, planError, incomplete) {
     ${section("Not fixed:", plan.notFixed)}
     ${section("Risks:", plan.risks)}
     ${section("Assumptions:", plan.assumptions)}
-    ${wikiRefsHtml(plan)}
-    ${skillsHtml(plan)}
+    ${missingInputsHtml(plan)}
     ${
       stepped
         ? stepsHtml(plan, editHtml)
@@ -2866,11 +2761,10 @@ function renderFixPlan(plan, planError, incomplete) {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 3: a skills-driven plan, run one step at a time
+// Phase 3: a stepped plan, run one step at a time
 //
-// A plan made with the team skills is a numbered list of steps. Each step
-// applies one skill (or is manual), and only the next pending step can be
-// acted on: an edit step is applied and then verified against the files, a
+// A plan is a numbered list of steps. Each step either edits files or is
+// manual, and only the next pending step can be acted on: an edit step is applied and then verified against the files, a
 // manual step (work items, deploys, a decision) is marked done by you. A step
 // that fails verification stops the run — later steps stay locked.
 // ---------------------------------------------------------------------------
@@ -2885,7 +2779,7 @@ function isStepped(plan) {
 function revisionLineHtml(plan) {
   const fb = plan.feedback || [];
   if (!plan.revision || plan.revision < 2) return "";
-  return `<details class="ws-skill-more ws-revision">
+  return `<details class="ws-more ws-revision">
       <summary>Revision ${plan.revision} — shaped by ${fb.length} note${fb.length === 1 ? "" : "s"} of yours; latest: “${esc(
         (fb[fb.length - 1] || {}).text || ""
       )}”</summary>
@@ -2900,12 +2794,12 @@ function reviseHtml(plan, open) {
   return `<div class="ws-revise">
       <h3>Revise the plan</h3>
       <p class="hint">
-        Tell it what to change — answer a missing input, swap a skill, drop or reword a step,
+        Tell it what to change — answer a missing input, drop or reword a step,
         change an edit. It re-plans read-only and shows you the new plan before anything is
         written.${locked ? ` The ${locked} step${locked === 1 ? "" : "s"} already carried out stay as they are.` : ""}
       </p>
       <textarea id="wsReviseText" rows="3" maxlength="2000"
-        placeholder="e.g. The grade bands are 9-12 only. Use add-repeating-header instead of step 2. Drop the deploy step."></textarea>
+        placeholder="e.g. The grade bands are 9-12 only. Drop the deploy step."></textarea>
       <div class="row wrap ws-apply-row">
         <button id="wsReviseBtn" class="primary">Revise plan</button>
         <span id="wsReviseStatus" class="status"></span>
@@ -2948,76 +2842,17 @@ function wireRevise(plan, box) {
   });
 }
 
-function skillLink(x) {
-  return x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.name)}</a>` : esc(x.name);
-}
-
-/** Inventory, selection (in order), rejects, gaps and missing inputs. */
-function skillsHtml(plan) {
-  const sk = plan.skills || {};
-  const selected = sk.selected || [];
-  const inventory = sk.inventory || [];
+/** Questions the plan couldn't answer, each with a shortcut into the revise box. */
+function missingInputsHtml(plan) {
   const missing = plan.missingInputs || [];
-  if (!(sk.available || []).length && !selected.length) {
-    return plan.skills
-      ? `<div class="ws-plan-note"><strong>Team skills:</strong> none were available for this plan.</div>`
-      : "";
-  }
-  const rejected = sk.rejected || [];
-  const gaps = sk.gaps || [];
-  return `<div class="ws-requests ws-skills">
-      <h3>Team skills for this case</h3>
-      ${
-        selected.length
-          ? `<ol class="ws-skill-list">${selected
-              .map(
-                (x) => `<li><strong>${skillLink(x)}</strong> — ${esc(x.why)}${
-                  x.feeds ? ` <span class="muted">→ ${esc(x.feeds)}</span>` : ""
-                }</li>`
-              )
-              .join("")}</ol>`
-          : `<p class="caveat">No team skill fits this case — every step below is manual or plain edits.</p>`
-      }
-      ${
-        gaps.length
-          ? `<div class="ws-plan-note"><strong>Not covered by a skill:</strong></div>
-             <ul class="ws-skill-gaps">${gaps.map((g) => `<li>${esc(g)}</li>`).join("")}</ul>`
-          : ""
-      }
-      ${
-        rejected.length
-          ? `<details class="ws-skill-more"><summary>Considered and rejected (${rejected.length})</summary>
-               <ul>${rejected.map((r) => `<li><strong>${esc(r.name)}</strong> — ${esc(r.reason)}</li>`).join("")}</ul>
-             </details>`
-          : ""
-      }
-      ${
-        inventory.length
-          ? `<details class="ws-skill-more"><summary>Skills inventory (${inventory.length})</summary>
-               <div class="ws-table-scroll"><table class="ws-skill-table">
-                 <thead><tr><th>Skill</th><th>Purpose</th><th>Triggers</th><th>Inputs</th><th>Outputs</th></tr></thead>
-                 <tbody>${inventory
-                   .map(
-                     (i) => `<tr><td>${skillLink(i)}</td><td>${esc(i.purpose)}</td><td>${esc(i.triggers)}</td>
-                       <td>${esc(i.inputs)}</td><td>${esc(i.outputs)}</td></tr>`
-                   )
-                   .join("")}</tbody>
-               </table></div>
-             </details>`
-          : ""
-      }
-    </div>
-    ${
-      missing.length
-        ? `<div class="caveat ws-missing">
-             <strong>Missing inputs</strong> — a selected skill needs these, and the edits that depend
-             on them were left out. Answer them below and the plan is revised to use your answers:
-             <ul>${missing
-               .map((m, i) => `<li>${esc(m)} <button class="link" data-answer="${i}">answer</button></li>`)
-               .join("")}</ul>
-           </div>`
-        : ""
-    }`;
+  if (!missing.length) return "";
+  return `<div class="caveat ws-missing">
+      <strong>Missing inputs</strong> — the plan needs these, and the edits that depend
+      on them were left out. Answer them below and the plan is revised to use your answers:
+      <ul>${missing
+        .map((m, i) => `<li>${esc(m)} <button class="link" data-answer="${i}">answer</button></li>`)
+        .join("")}</ul>
+    </div>`;
 }
 
 function stepVerifyFor(plan) {
@@ -3092,7 +2927,7 @@ function stepsHtml(plan, editHtml) {
     return `<div class="ws-step-card ${st ? "settled" : isNext ? "next" : "locked"}">
         <div class="ws-step-head">
           <span class="ws-step">${s.n}</span>
-          <span class="ws-step-skill">${s.skill ? skillLink({ name: s.skill, url: s.url }) : `<span class="muted">manual — no skill</span>`}</span>
+          <span class="ws-step-kind">${s.kind === "edit" ? "Edit" : "Manual"}</span>
           <span class="muted">${s.kind === "edit" ? "edits files" : "you carry this out"}</span>
           ${pill}
         </div>

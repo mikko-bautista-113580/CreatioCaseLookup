@@ -109,15 +109,14 @@ top-level file whatever the case is about. Use the case scope instead:
 
 ```
 .venv/Scripts/python -m creatio_case_lookup.workspace_cli load --case <SRxxxxxxxx>   # stored case analysis, if any
-.venv/Scripts/python -m creatio_case_lookup.workspace_cli scope <SRxxxxxxxx>         # otherwise: files + wiki pages, no model
+.venv/Scripts/python -m creatio_case_lookup.workspace_cli scope <SRxxxxxxxx>         # otherwise: related files, no model
 ```
 
 `scope` searches the folders **recursively**, ranks files by the case's keywords
 (a school-code folder or a file named in the case ranks highest, then content
 matches, then one hop of `<cfinclude>`), and keeps at most `cap` of them — so
 the cap is already applied and there is **no over-cap question** in this mode.
-It also returns the matching Custom Team wiki pages (read them with
-`.venv/Scripts/python -m creatio_case_lookup.workspace_cli wiki page "<path>"`). Read only the listed files. Full case
+Read only the listed files. Full case
 analyses (with the report stored) are produced by the app's **Analyze for
 SRxxxxxxxx** button; `save` stays directory/file only.
 

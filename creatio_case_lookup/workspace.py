@@ -572,14 +572,13 @@ def enumerate_workspaces(dirs: list[str]) -> dict:
 #
 # AnalysisMode: "directory" | "file" | "case". `case` is a case-scoped analysis:
 # only the files the app ranked as related to one bound case (searched
-# recursively), plus the team-wiki pages that match it. `target` is the SR number.
+# recursively). `target` is the SR number.
 # AnalysisStatus: "complete" | "stopped" | "timeout".
 #
 # AnalysisMeta (the sidecar JSON) keys, as in TS: version, slug, path, paths,
 # mode, target, startedAt, finishedAt, durationMs?, model?, cap, capExceeded,
 # proceededOverCap, filesAnalyzed, dirsPresent, skipped, truncated, toolCalls,
-# usage, status, report, selection?, wikiPages?, terms?, briefFetchedAt?,
-# wikiSkipped?.
+# usage, status, report, selection?, terms?, briefFetchedAt?.
 # ---------------------------------------------------------------------------
 
 

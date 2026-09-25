@@ -15,7 +15,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from creatio_case_lookup import (
-    ado_skills,
     case_brief,
     claude_run,
     env,
@@ -23,7 +22,6 @@ from creatio_case_lookup import (
     paths,
     server,
     workspace,
-    ado_wiki,
 )
 from creatio_case_lookup.claude_run import Launcher
 from creatio_case_lookup.creatio_client import AuthError
@@ -39,9 +37,7 @@ def sandbox(tmp_path, monkeypatch):
         "CREATIO_BASE_URL=https://example.creatio.test\n"
         "CREATIO_ASPXAUTH=ABCDEFGHIJKLMNOPQRSTUVWXYZ\n"
         "CREATIO_BPMCSRF=short\n"
-        "CREATIO_BPMLOADER=\n"
-        "CREATIO_WIKI_ENABLED=0\n"
-        "CREATIO_SKILLS_ENABLED=0\n",
+        "CREATIO_BPMLOADER=\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(paths, "ENV_PATH", envp)
@@ -52,11 +48,6 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace, "INDEX_PATH", ad / "index.json")
     monkeypatch.setattr(case_brief, "CASES_DIR", ad / "cases")
     monkeypatch.setattr(fix_plan, "FIXES_DIR", str(ad / "fixes"))
-    monkeypatch.setattr(ado_wiki, "WIKI_DIR", ad / "wiki")
-    monkeypatch.setattr(ado_wiki, "TREE_PATH", ad / "wiki" / "tree.json")
-    monkeypatch.setattr(ado_wiki, "PAGES_DIR", ad / "wiki" / "pages")
-    monkeypatch.setattr(ado_skills, "TREE_PATH", ad / "skills" / "tree.json")
-    monkeypatch.setattr(ado_skills, "PAGES_DIR", ad / "skills" / "pages")
     # No claude on PATH unless a test installs the fake.
     monkeypatch.setattr(claude_run, "_LAUNCHER", None)
     ws = tmp_path / "proj"
@@ -386,8 +377,9 @@ def test_fix_plan_and_apply_round_trip(client, sandbox, monkeypatch):
     ev = parse_sse(r.text)
     assert ev[0][0] == "start"
     assert ev[0][1]["caseNumber"] == CASE and ev[0][1]["files"] == 1 and ev[0][1]["hasAnalysis"] is False
-    assert ev[0][1]["analysisGenerated"] is None and ev[0][1]["wikiPages"] == []
-    assert ev[0][1]["skills"] == [] and "CREATIO_SKILLS_ENABLED" in ev[0][1]["skillsWarning"]
+    assert ev[0][1]["analysisGenerated"] is None
+    assert list(ev[0][1]) == ["caseNumber", "caseSubject", "paths", "files", "hasAnalysis", "analysisGenerated",
+                              "analysisStale", "analysisFiles", "analysisMode", "revising"]
     assert ev[-1][0] == "done"
     done = ev[-1][1]
     assert done["planError"] is None and done["costUsd"] == 0.5 and done["durationMs"] == 7
@@ -557,10 +549,3 @@ def test_old_brief_gets_its_codes_filled_on_the_fly(sandbox, monkeypatch):
     monkeypatch.setattr(server, "get_case_info", broken)
     old = bind_case(number="SR00000009")
     assert "codes" not in asyncio.run(server.ensure_case_info(old))
-
-
-def test_skills_probe_when_disabled(client):
-    d = client.get("/api/skills/test").json()
-    assert d["ok"] is False and d["reason"] == "disabled"
-    d = client.get("/api/skills").json()
-    assert d["ok"] is False and d["skills"] == [] and d["reason"] == "disabled"
