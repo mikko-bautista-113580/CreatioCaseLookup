@@ -239,6 +239,13 @@ table.cases td.num { font-family: monospace; white-space: nowrap; }
 .tl-text:not(.rich) p { margin: 0 0 0.45rem; }
 .tl-text:not(.rich) p:last-child { margin-bottom: 0; }
 .tl-meta { font-size: 0.75rem; color: var(--muted); }
+/* Case info — Creatio's stacked label / value panel. */
+.case-info { margin: 0; max-width: 32rem; font-size: 0.88rem; }
+.ci-row { padding: 0.45rem 0 0.35rem; border-bottom: 1px dotted var(--line); }
+.ci-row dt { color: var(--muted); font-size: 0.8rem; margin-bottom: 0.1rem; }
+.ci-row dd { margin: 0; color: var(--ink); }
+.ci-row dd.ci-link { color: var(--brand); }
+.ci-req { color: var(--danger); margin-left: 0.15rem; }
 .extra-grid { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.75rem; font-size: 0.85rem; }
 .extra-grid .k { color: var(--muted); }
 

@@ -600,9 +600,51 @@ export async function getExtraFields(caseId: string): Promise<ExtraFields> {
 }
 
 // ---------------------------------------------------------------------------
+// Detail: Case info (Creatio's left-hand "Case info" panel)
+// ---------------------------------------------------------------------------
+export interface CaseInfoField {
+  label: string;
+  value: string;
+  /** Creatio renders these as links (blue); the rest are plain values. */
+  link?: boolean;
+  required?: boolean;
+  date?: boolean;
+}
+
+/**
+ * The panel's fields, in Creatio's order, as one read. Column names were
+ * verified against live records (a wrong name in $select/$expand fails the
+ * whole query). SIS District code and Institution ID live on the Account, not
+ * the Case — Creatio's panel pulls them through the Account lookup.
+ */
+const CASE_INFO_QUERY =
+  "$select=Id,SolutionDate,NltSchoolCode" +
+  "&$expand=Contact($select=Name),Account($select=Name,NltDistrictCode,NltInstNum)," +
+  "Priority($select=Name),Category($select=Name),ServiceItem($select=Name)," +
+  "NltServiceArea($select=Name),NltCaseType($select=Name)";
+
+export async function getCaseInfo(caseId: string): Promise<CaseInfoField[]> {
+  const r = (await odataGet(`Case(${caseId})?${CASE_INFO_QUERY}`)) || {};
+  const s = (v: unknown) => (v == null ? "" : String(v));
+  return [
+    { label: "Contact", value: s(r.Contact?.Name), link: true },
+    { label: "Account", value: s(r.Account?.Name), link: true, required: true },
+    { label: "Priority", value: s(r.Priority?.Name), link: true },
+    { label: "Category", value: s(r.Category?.Name) },
+    { label: "Service", value: s(r.ServiceItem?.Name), link: true, required: true },
+    { label: "Service Area", value: s(r.NltServiceArea?.Name), required: true },
+    { label: "Case Type", value: s(r.NltCaseType?.Name) },
+    { label: "Resolution time", value: s(r.SolutionDate), date: true },
+    { label: "SIS District code", value: s(r.Account?.NltDistrictCode) },
+    { label: "School Code", value: s(r.NltSchoolCode) },
+    { label: "Institution ID Number", value: s(r.Account?.NltInstNum) },
+  ];
+}
+
+// ---------------------------------------------------------------------------
 // Orchestration: fetch requested detail for a set of cases
 // ---------------------------------------------------------------------------
-export type DetailKind = "summary" | "description" | "timeline" | "latest" | "extra";
+export type DetailKind = "summary" | "description" | "timeline" | "latest" | "extra" | "caseinfo";
 
 export interface CaseDetail {
   description?: string; // plain text (AI context / fallback)
@@ -610,6 +652,7 @@ export interface CaseDetail {
   timeline?: TimelineEntry[];
   latest?: TimelineEntry | null;
   extra?: ExtraFields;
+  caseInfo?: CaseInfoField[];
 }
 
 /** Fetch the requested detail kinds for one case. `summary` needs no extra call. */
@@ -633,6 +676,7 @@ export async function getCaseDetail(
   }
 
   if (want.has("extra")) out.extra = await getExtraFields(c.Id);
+  if (want.has("caseinfo")) out.caseInfo = await getCaseInfo(c.Id);
 
   return out;
 }

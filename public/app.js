@@ -560,6 +560,22 @@ function renderDetail(c, detail) {
   const d = c.detail || {};
   const general = [];
   const timeline = [];
+  let caseInfo = "";
+
+  if (detail.includes("caseinfo") && d.caseInfo) {
+    caseInfo =
+      `<dl class="case-info">` +
+      d.caseInfo
+        .map((f) => {
+          const v = f.date ? fmtDate(f.value) : f.value;
+          return (
+            `<div class="ci-row"><dt>${esc(f.label)}${f.required ? '<span class="ci-req">*</span>' : ""}</dt>` +
+            `<dd class="${f.link && v ? "ci-link" : ""}">${v ? esc(v) : "&nbsp;"}</dd></div>`
+          );
+        })
+        .join("") +
+      `</dl>`;
+  }
 
   if (detail.includes("description")) {
     const body = d.descriptionSegments && d.descriptionSegments.length
@@ -601,8 +617,9 @@ function renderDetail(c, detail) {
     );
   }
 
-  // Creatio's order: Timeline first, General info second.
+  // Case info leads, then Creatio's order: Timeline, General info.
   const panes = [
+    { key: "caseinfo", label: "Case info", html: caseInfo },
     { key: "timeline", label: `Timeline${tlCount === null ? "" : ` (${tlCount})`}`, html: timeline.join("") },
     { key: "general", label: "General info", html: general.join("") },
   ].filter((p) => p.html);
@@ -610,8 +627,9 @@ function renderDetail(c, detail) {
   if (!panes.length) return '<div class="detail-box"></div>';
   if (panes.length === 1) return `<div class="detail-box">${panes[0].html}</div>`;
 
-  // Open on General info: read what the case is about before the back-and-forth.
-  const active = panes.some((p) => p.key === "general") ? "general" : panes[0].key;
+  // Open on the first tab — Case info when requested, else General info so you
+  // read what the case is about before the back-and-forth.
+  const active = panes[0].key === "caseinfo" || !panes.some((p) => p.key === "general") ? panes[0].key : "general";
   const tabs = panes
     .map(
       (p) =>
