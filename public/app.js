@@ -617,11 +617,26 @@ function renderDetail(c, detail) {
     );
   }
 
-  // Case info leads, then Creatio's order: Timeline, General info.
+  let attach = "";
+  let attachCount = null;
+  if (detail.includes("attachments")) {
+    if (d.attachmentsError) {
+      attach = `<div class="desc">Attachments could not be listed. Add CaseFile to CREATIO_ALLOWED_ENTITIES in .env and restart the app.</div>`;
+    } else {
+      const list = d.attachments || [];
+      attachCount = list.length;
+      attach = list.length
+        ? renderAttachments(list, { note: false })
+        : '<div class="desc">(no attachments)</div>';
+    }
+  }
+
+  // Case info leads, then Creatio's order: Timeline, General info, Attachments.
   const panes = [
     { key: "caseinfo", label: "Case info", html: caseInfo },
     { key: "timeline", label: `Timeline${tlCount === null ? "" : ` (${tlCount})`}`, html: timeline.join("") },
     { key: "general", label: "General info", html: general.join("") },
+    { key: "attachments", label: `Attachments${attachCount === null ? "" : ` (${attachCount})`}`, html: attach },
   ].filter((p) => p.html);
 
   if (!panes.length) return '<div class="detail-box"></div>';
@@ -649,6 +664,10 @@ function renderDetail(c, detail) {
 // Detail boxes are re-rendered wholesale, so switching tabs is delegated rather
 // than wired per box.
 document.addEventListener("click", (e) => {
+  // Lookup's Attachments tab: same save-to-folder form as the bound case (which
+  // wires its own buttons, hence the .detail-box scope).
+  const save = e.target.closest(".detail-box .ws-attach-save");
+  if (save) return openAttachSave(save);
   const tab = e.target.closest(".dtab");
   if (!tab) return;
   const box = tab.closest(".detail-box");
@@ -2069,13 +2088,13 @@ const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
  * These are for YOU. The fix planner is told the filenames but cannot read
  * inside them, so a logo's actual colours still have to come from the case text.
  */
-function renderAttachments(list) {
+function renderAttachments(list, { note = true, save = true } = {}) {
   const items = list || [];
   if (!items.length) return "";
   return `<div class="ws-attach">
     <div class="ws-attach-head">
       ${items.length} attachment${items.length === 1 ? "" : "s"}
-      <span class="muted">· contents aren't read when planning a fix</span>
+      ${note ? `<span class="muted">· contents aren't read when planning a fix</span>` : ""}
     </div>
     <div class="ws-attach-grid">
       ${items
@@ -2088,7 +2107,7 @@ function renderAttachments(list) {
             : `<a class="ws-attach-file" href="${href}" target="_blank" rel="noopener">📄 open</a>`;
           // Only images can be dropped into a workspace folder, and only when
           // one is configured — see saveAssetToWorkspace() for why.
-          const canSave = isImage && (state.ws.paths || []).length > 0;
+          const canSave = save && isImage && (state.ws.paths || []).length > 0;
           return `<figure class="ws-attach-item">
             ${body}
             <figcaption>

@@ -644,7 +644,14 @@ export async function getCaseInfo(caseId: string): Promise<CaseInfoField[]> {
 // ---------------------------------------------------------------------------
 // Orchestration: fetch requested detail for a set of cases
 // ---------------------------------------------------------------------------
-export type DetailKind = "summary" | "description" | "timeline" | "latest" | "extra" | "caseinfo";
+export type DetailKind =
+  | "summary"
+  | "description"
+  | "timeline"
+  | "latest"
+  | "extra"
+  | "caseinfo"
+  | "attachments";
 
 export interface CaseDetail {
   description?: string; // plain text (AI context / fallback)
@@ -653,6 +660,9 @@ export interface CaseDetail {
   latest?: TimelineEntry | null;
   extra?: ExtraFields;
   caseInfo?: CaseInfoField[];
+  attachments?: CaseAttachment[];
+  /** Set when attachments were requested but could not be listed (e.g. CaseFile not allowlisted). */
+  attachmentsError?: string;
 }
 
 /** Fetch the requested detail kinds for one case. `summary` needs no extra call. */
@@ -677,6 +687,14 @@ export async function getCaseDetail(
 
   if (want.has("extra")) out.extra = await getExtraFields(c.Id);
   if (want.has("caseinfo")) out.caseInfo = await getCaseInfo(c.Id);
+  if (want.has("attachments")) {
+    // A missing CaseFile allowlist entry shouldn't sink the rest of the detail.
+    try {
+      out.attachments = await getAttachments(c.Id);
+    } catch (e) {
+      out.attachmentsError = e instanceof Error ? e.message : String(e);
+    }
+  }
 
   return out;
 }
