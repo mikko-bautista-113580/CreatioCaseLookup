@@ -89,6 +89,9 @@ node dist/workspaceCli.js load
 node dist/workspaceCli.js load --mode file --file app.js
 ```
 
+A bound case can change **what** gets analyzed only through the case scope
+described below; it never changes a whole-folder analysis.
+
 Adding or removing a folder makes it a **different** workspace with its own
 stored report, so it won't silently reuse the previous one.
 
@@ -97,6 +100,26 @@ Exit **4** means nothing is stored for that set of folders.
 > ⚠️ A stored report with `"truncated": true` rests on **partial** information —
 > a single file stood in for the whole workspace, a listing was cut short, or the
 > run was stopped. Say so whenever you rely on it.
+
+### When a case is bound: scope to the case instead
+
+If `node dist/workspaceCli.js case` exits **0** and the user's goal is working
+that case, a whole-folder analysis is usually the wrong tool — it reads every
+top-level file whatever the case is about. Use the case scope instead:
+
+```
+node dist/workspaceCli.js load --case <SRxxxxxxxx>   # stored case analysis, if any
+node dist/workspaceCli.js scope <SRxxxxxxxx>         # otherwise: files + wiki pages, no model
+```
+
+`scope` searches the folders **recursively**, ranks files by the case's keywords
+(a school-code folder or a file named in the case ranks highest, then content
+matches, then one hop of `<cfinclude>`), and keeps at most `cap` of them — so
+the cap is already applied and there is **no over-cap question** in this mode.
+It also returns the matching Custom Team wiki pages (read them with
+`workspaceCli wiki page "<path>"`). Read only the listed files. Full case
+analyses (with the report stored) are produced by the app's **Analyze for
+SRxxxxxxxx** button; `save` stays directory/file only.
 
 ---
 

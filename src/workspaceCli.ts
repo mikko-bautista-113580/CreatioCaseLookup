@@ -14,11 +14,19 @@
  * Usage:
  *   node dist/workspaceCli.js path [<p1> [<p2> [<p3>]]]
  *   node dist/workspaceCli.js scan [<p1> [<p2> [<p3>]]]
- *   node dist/workspaceCli.js load [<p1> [<p2> [<p3>]]] [--mode directory|file] [--file <name>]
+ *   node dist/workspaceCli.js load [<p1> [<p2> [<p3>]]] [--mode directory|file|case] [--file <name>] [--case <SR>]
  *   node dist/workspaceCli.js save <directory|file> [<targetFile>] [--path <p>]... [--over-cap] [--model <id>]
  *        ... with the Markdown report on stdin
  *   node dist/workspaceCli.js case [<SRxxxxxxxx>]
  *   node dist/workspaceCli.js attachment <fileId> <saveAsName> [--path <folder>] [--overwrite]
+ *   node dist/workspaceCli.js scope [<SRxxxxxxxx>] [--no-wiki]
+ *   node dist/workspaceCli.js wiki search <terms...>
+ *   node dist/workspaceCli.js wiki page <path>
+ *
+ * `scope` prints what a case-scoped analysis would read — the case keywords,
+ * the related files (searched recursively, ranked, capped) and the matching
+ * team-wiki pages — without running a model. `wiki` searches and reads the
+ * team's Azure DevOps wiki through the user's Azure CLI login.
  *
  * `save` takes folders as repeatable --path flags rather than positionally,
  * because otherwise a folder and the mode/target arguments would be ambiguous.
@@ -64,6 +72,11 @@ import {
   type AnalysisMode,
   type AnalyzedFile,
 } from "./workspace.js";
+import { computeCaseScope, scopeSummary } from "./caseScope.js";
+import { isCaseAnalysisStale } from "./caseFiles.js";
+import { getWikiPage, getWikiTree, WikiUnavailable } from "./adoWiki.js";
+import { scoreByPath } from "./wikiSelect.js";
+import { sanitizeTerm } from "./caseKeywords.js";
 
 const EXIT_USAGE = 1;
 const EXIT_BAD_PATH = 2;
@@ -190,19 +203,22 @@ function cmdScan(positional: string[]): void {
 
 function cmdLoad(positional: string[], flags: Record<string, string | true>): void {
   const abs = resolveTargets(positional);
-  const mode = (typeof flags.mode === "string" ? flags.mode : "directory") as AnalysisMode;
-  if (mode !== "directory" && mode !== "file") {
-    die(EXIT_USAGE, `--mode must be "directory" or "file", got "${String(flags.mode)}".`);
+  const caseFlag = typeof flags.case === "string" ? validateCaseNumber(flags.case) : flags.case === true ? getBoundCase() : "";
+  const mode = (typeof flags.mode === "string" ? flags.mode : caseFlag ? "case" : "directory") as AnalysisMode;
+  if (mode !== "directory" && mode !== "file" && mode !== "case") {
+    die(EXIT_USAGE, `--mode must be "directory", "file" or "case", got "${String(flags.mode)}".`);
   }
   const file = typeof flags.file === "string" ? flags.file : undefined;
   if (mode === "file" && !file) die(EXIT_USAGE, "--mode file requires --file <name>.");
+  const caseNumber = mode === "case" ? caseFlag || getBoundCase() : "";
+  if (mode === "case" && !caseNumber) die(EXIT_USAGE, "--mode case needs --case <SR…> or a bound case.");
 
-  const loaded = loadAnalysisFor(abs, mode, file);
+  const loaded = loadAnalysisFor(abs, mode, mode === "case" ? caseNumber : file);
   if (!loaded) {
     const entry = indexEntryFor(abs);
     die(
       EXIT_NOT_FOUND,
-      `No stored ${mode} analysis for ${abs.join(" + ")}.` +
+      `No stored ${mode} analysis${caseNumber ? ` for ${caseNumber}` : ""} in ${abs.join(" + ")}.` +
         (entry?.files.length
           ? ` Stored single-file analyses: ${entry.files.map((f) => f.name).join(", ")}.`
           : "") +
@@ -213,7 +229,10 @@ function cmdLoad(positional: string[], flags: Record<string, string | true>): vo
   // Report staleness so a consumer can decide whether to trust the report.
   let stale: boolean | null = null;
   try {
-    stale = isStale(loaded.meta, enumerateWorkspaces(abs));
+    stale =
+      mode === "case"
+        ? isCaseAnalysisStale(loaded.meta, loadBrief(caseNumber)?.fetchedAt)
+        : isStale(loaded.meta, enumerateWorkspaces(abs));
   } catch {
     stale = null;
   }
@@ -231,6 +250,7 @@ async function cmdSave(args: Args): Promise<void> {
     );
   }
   const mode = rawMode as AnalysisMode;
+  // Case analyses carry a selection and wiki refs only the app computes.
   if (mode !== "directory" && mode !== "file") {
     die(EXIT_USAGE, `Mode must be "directory" or "file", got "${rawMode}".`);
   }
@@ -367,8 +387,9 @@ async function cmdAttachment(args: Args): Promise<void> {
 
   const { downloadFile } = await import("./creatioClient.js");
   const file = await downloadFile("CaseFile", id);
+  // `--path` narrows `folders` to the one given, so folders[0] is the target.
   const saved = saveAssetToWorkspace(
-    typeof args.flags.path === "string" ? args.flags.path : folders[0],
+    folders[0],
     rawName,
     file.buffer,
     { overwrite: args.flags["over-write"] === true || args.flags.overwrite === true, allowed: folders }
@@ -383,6 +404,46 @@ async function cmdAttachment(args: Args): Promise<void> {
     backup: saved.backup || null,
     note: "The file is now in the folder. If the template fetches it over HTTP, it must also be deployed to that URL before the change is visible.",
   });
+}
+
+// ---------------------------------------------------------------------------
+// scope / wiki
+// ---------------------------------------------------------------------------
+
+/** What a case-scoped analysis would read, without running a model. */
+async function cmdScope(args: Args): Promise<void> {
+  const number = args.positional[0] ? validateCaseNumber(args.positional[0]) : getBoundCase();
+  if (!number) die(EXIT_NOT_FOUND, "No case is bound. Pass one: workspaceCli scope SR00031980");
+  const brief = loadBrief(number);
+  if (!brief) {
+    die(
+      EXIT_NOT_FOUND,
+      `No stored brief for ${number}. Bind it from the app's Workspace tab (phase 1) so its text is fetched.`
+    );
+  }
+  const abs = resolveTargets(args.paths);
+  const scope = await computeCaseScope(brief, abs, { wiki: args.flags["no-wiki"] !== true });
+  out(scopeSummary(scope));
+}
+
+async function cmdWiki(args: Args): Promise<void> {
+  const [sub, ...rest] = args.positional;
+  try {
+    if (sub === "search" && rest.length) {
+      const terms = rest.map(sanitizeTerm).filter(Boolean).map((term) => ({ term, weight: 1, kind: "word" as const }));
+      const tree = await getWikiTree();
+      out({ pages: tree.length, matches: scoreByPath(tree, terms).slice(0, 15) });
+      return;
+    }
+    if (sub === "page" && rest.length) {
+      out(await getWikiPage(rest.join(" ")));
+      return;
+    }
+  } catch (e) {
+    if (e instanceof WikiUnavailable) die(EXIT_NOT_FOUND, e.message);
+    throw e;
+  }
+  die(EXIT_USAGE, "Usage: workspaceCli wiki search <terms...> | workspaceCli wiki page <path>");
 }
 
 // ---------------------------------------------------------------------------
@@ -406,16 +467,23 @@ async function main(): Promise<void> {
       return cmdCase(args.positional);
     case "attachment":
       return cmdAttachment(args);
+    case "scope":
+      return cmdScope(args);
+    case "wiki":
+      return cmdWiki(args);
     default:
       die(
         EXIT_USAGE,
         "Usage:\n" +
           "  workspaceCli path [<p1> [<p2> [<p3>]]]\n" +
           "  workspaceCli scan [<p1> [<p2> [<p3>]]]\n" +
-          "  workspaceCli load [<p1> [<p2> [<p3>]]] [--mode directory|file] [--file <name>]\n" +
+          "  workspaceCli load [<p1> [<p2> [<p3>]]] [--mode directory|file|case] [--file <name>] [--case <SR>]\n" +
           "  workspaceCli save <directory|file> [<targetFile>] [--path <p>]... [--over-cap] [--model <id>]\n" +
           "  workspaceCli case [<SRxxxxxxxx>]\n" +
-          "  workspaceCli attachment <fileId> <saveAsName> [--path <folder>] [--overwrite]"
+          "  workspaceCli attachment <fileId> <saveAsName> [--path <folder>] [--overwrite]\n" +
+          "  workspaceCli scope [<SRxxxxxxxx>] [--path <p>]... [--no-wiki]\n" +
+          "  workspaceCli wiki search <terms...>\n" +
+          "  workspaceCli wiki page <path>"
       );
   }
 }

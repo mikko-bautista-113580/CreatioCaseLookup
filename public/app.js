@@ -84,6 +84,8 @@ const state = {
     plan: null,
     planning: false,
     planAbort: null,
+    // The bound case's scoped analysis (files + wiki pages), when one is stored.
+    caseAnalysis: null,
   },
 };
 
@@ -1061,6 +1063,21 @@ async function testConn() {
 }
 $("#testCfgBtn").addEventListener("click", testConn);
 
+async function testWikiConn() {
+  const s = $("#wikiStatus");
+  s.innerHTML = '<span class="spinner"></span> Checking the Azure CLI login…';
+  s.className = "status";
+  try {
+    const r = await api("/api/wiki/test");
+    s.textContent = r.message;
+    s.className = "status " + (r.ok ? "ok" : "err");
+  } catch (e) {
+    s.textContent = e.message;
+    s.className = "status err";
+  }
+}
+$("#testWikiBtn").addEventListener("click", testWikiConn);
+
 // Interactive browser login — opens a real browser at Creatio's login page and
 // captures the session cookies when the user finishes signing in. Progress
 // arrives over SSE because the sign-in (with MFA) can take minutes.
@@ -1227,7 +1244,8 @@ async function loadWorkspace() {
       wsSetHint(data.stale ? "Saved. Files have changed since the last analysis." : "Saved.");
     }
 
-    renderStored(data.analysis, data.stale);
+    renderStored(data.analysis, data.stale, data.caseAnalysis);
+    state.ws.caseAnalysis = data.caseAnalysis || null;
     state.ws.analysisReady = !!(data.analysis && data.analysis.directory);
     state.ws.analysisStale = !!data.stale;
     if (data.valid) await rescan();
@@ -1338,10 +1356,11 @@ async function clearWorkspace() {
     analysisReady: false,
     analysisStale: false,
     plan: null,
+    caseAnalysis: null,
   });
 
   renderPathRows([]);
-  for (const id of ["#wsFiles", "#wsStored", "#wsPanel", "#wsFixPanel", "#wsFixPlan"]) {
+  for (const id of ["#wsFiles", "#wsScope", "#wsStored", "#wsPanel", "#wsFixPanel", "#wsFixPlan"]) {
     const el = $(id);
     el.classList.add("hidden");
     el.innerHTML = "";
@@ -1458,11 +1477,12 @@ function renderCensus() {
   }
 }
 
-function renderStored(analysis, stale) {
+function renderStored(analysis, stale, caseAnalysis) {
   const box = $("#wsStored");
   const dir = analysis?.directory;
   const files = analysis?.files || [];
-  if (!dir && !files.length) {
+  const ca = caseAnalysis || null;
+  if (!dir && !files.length && !ca) {
     box.classList.add("hidden");
     box.innerHTML = "";
     return;
@@ -1470,6 +1490,15 @@ function renderStored(analysis, stale) {
   box.classList.remove("hidden");
 
   const rows = [];
+  if (ca) {
+    const w = ca.wikiPages.length;
+    rows.push(
+      `<li><button class="link" data-ws-open="case">For ${esc(ca.caseNumber)}</button>
+         <span class="muted">· ${fmtDate(ca.finishedAt)} · ${ca.files.length} related file${ca.files.length === 1 ? "" : "s"} · ${
+           w ? `${w} wiki page${w === 1 ? "" : "s"}` : "no wiki pages"
+         }${ca.truncated ? " · ⚠ partial" : ""}${ca.stale ? " · ⚠ changed since" : ""}</span></li>`
+    );
+  }
   if (dir) {
     rows.push(
       `<li><button class="link" data-ws-open="directory">Whole workspace</button>
@@ -1521,8 +1550,10 @@ async function runWorkspaceAnalysis(opts) {
   const scope =
     mode === "file"
       ? opts.file
-      : `${state.ws.count} file${state.ws.count === 1 ? "" : "s"}` +
-        (state.ws.paths.length > 1 ? ` · ${state.ws.paths.length} folders` : "");
+      : mode === "case"
+        ? `files related to ${state.ws.case.number}`
+        : `${state.ws.count} file${state.ws.count === 1 ? "" : "s"}` +
+          (state.ws.paths.length > 1 ? ` · ${state.ws.paths.length} folders` : "");
   panel.innerHTML = `
     <div class="ai-head">
       <span class="ai-run-title">📂 Workspace analysis <span class="muted">· ${esc(scope)}</span></span>
@@ -1568,6 +1599,8 @@ async function runWorkspaceAnalysis(opts) {
     });
     if (!res.ok || !res.body) {
       const data = await res.json().catch(() => ({}));
+      // Nothing matched the case: show what was searched so the user can judge.
+      if (data.error === "no_match" && data.scope) renderScope(data.scope);
       // The server enforces the cap too — surface its choice prompt.
       if (data.error === "over_cap") {
         applyCensus({ ...state.ws, count: data.count, cap: data.cap, overCap: true, files: data.files });
@@ -1580,6 +1613,7 @@ async function runWorkspaceAnalysis(opts) {
         $(".ai-status", panel).innerHTML =
           `<span class="spinner"></span> reading ${d.count} file${d.count === 1 ? "" : "s"}…`;
       },
+      scope: (d) => renderScope(d),
       tool: (d) => {
         const li = document.createElement("li");
         const target = (d.target || "").split(/[\\/]/).pop() || "";
@@ -1595,7 +1629,12 @@ async function runWorkspaceAnalysis(opts) {
       done: (d) => {
         output.classList.remove("streaming");
         $(".ai-status", panel).innerHTML = "✓ done";
-        finishTools(tools, raw, mode === "file" ? opts.file : "workspace", "workspace-analysis");
+        finishTools(
+          tools,
+          raw,
+          mode === "file" ? opts.file : mode === "case" ? state.ws.case.number : "workspace",
+          "workspace-analysis"
+        );
         const bits = [];
         if (d.filesAnalyzed) bits.push(`${d.filesAnalyzed} file(s) in scope`);
         if (d.toolCalls) bits.push(`${d.toolCalls} tool call(s)`);
@@ -1639,7 +1678,71 @@ $("#wsAddPathBtn").addEventListener("click", addPathRow);
 $("#wsSaveBtn").addEventListener("click", saveWorkspace);
 $("#wsRescanBtn").addEventListener("click", rescan);
 $("#wsClearBtn").addEventListener("click", clearWorkspace);
-$("#wsAnalyzeBtn").addEventListener("click", () => {
+/**
+ * Case-scoped vs whole-folder. With a case bound, the primary button analyzes
+ * only what's related to that case; the whole-folder run is a link beside it.
+ */
+function caseModeActive() {
+  return !!state.ws.case.number && !!state.ws.case.brief;
+}
+
+function updateAnalyzeControls() {
+  const on = caseModeActive();
+  $("#wsAnalyzeBtn").textContent = on ? `Analyze for ${state.ws.case.number}` : "Analyze";
+  $("#wsCaseModeHint").classList.toggle("hidden", !on || !state.ws.paths.length);
+  if (!on) {
+    $("#wsScope").classList.add("hidden");
+    $("#wsScope").innerHTML = "";
+  }
+}
+
+/** Render what a case-scoped analysis reads: files with reasons + wiki pages. */
+function renderScope(sc) {
+  const box = $("#wsScope");
+  box.classList.remove("hidden");
+  const terms = (sc.terms || []).slice(0, 12).map((t) => `<span class="pill">${esc(t.term)}</span>`).join(" ");
+  const multi = state.ws.paths.length > 1;
+  const files = (sc.files || []).length
+    ? `<ol class="ws-scope-files">${sc.files
+        .map(
+          (f) => `<li><code>${esc(f.rel)}</code>${
+            multi ? ` <span class="muted">in ${esc(String(f.folder).split(/[\\/]/).pop())}</span>` : ""
+          }<br><span class="muted">${esc(f.reason)}</span></li>`
+        )
+        .join("")}</ol>`
+    : `<p class="caveat">No files matched this case's keywords.</p>`;
+  const wiki = (sc.wiki || []).length
+    ? `<ul class="ws-scope-wiki">${sc.wiki
+        .map(
+          (w) => `<li><a href="${esc(w.url)}" target="_blank" rel="noopener">${esc(w.path)}</a>
+                   <span class="muted">· ${esc(w.why)}</span></li>`
+        )
+        .join("")}</ul>`
+    : `<p class="hint">${esc(sc.wikiSkipped || "No wiki pages matched.")}</p>`;
+  box.innerHTML = `
+    <h2>Case scope <span class="muted">· ${esc(sc.caseNumber || state.ws.case.number)}</span></h2>
+    <p class="hint">Keywords: ${terms || "none found"}</p>
+    <h3>Related files <span class="muted">· ${(sc.files || []).length} of ${sc.searched} searched${
+      sc.searchTruncated ? " · ⚠ search stopped early" : ""
+    } · cap ${sc.cap}</span></h3>
+    ${files}
+    <h3>Team wiki</h3>
+    ${wiki}`;
+}
+
+async function previewScope() {
+  const box = $("#wsScope");
+  box.classList.remove("hidden");
+  box.innerHTML = '<p class="hint"><span class="spinner"></span> Finding related files and wiki pages…</p>';
+  try {
+    renderScope(await api("/api/workspace/case-scope"));
+  } catch (e) {
+    box.innerHTML = `<div class="ai-error">${esc(e.message)}</div>`;
+  }
+}
+
+$("#wsPreviewScopeBtn").addEventListener("click", previewScope);
+function analyzeWholeFolder() {
   // Over the cap we never auto-run — the user has to make the call.
   if (state.ws.overCap) {
     const choice = $("#wsChoice");
@@ -1652,6 +1755,12 @@ $("#wsAnalyzeBtn").addEventListener("click", () => {
     return;
   }
   runWorkspaceAnalysis({ mode: "directory" });
+}
+
+$("#wsAnalyzeAllBtn").addEventListener("click", analyzeWholeFolder);
+$("#wsAnalyzeBtn").addEventListener("click", () => {
+  if (caseModeActive()) runWorkspaceAnalysis({ mode: "case" });
+  else analyzeWholeFolder();
 });
 
 // ---------------------------------------------------------------------------
@@ -2324,10 +2433,14 @@ function lastPlanLine() {
 }
 
 function renderHandoff() {
+  updateAnalyzeControls();
   const box = $("#wsHandoff");
   const { number, brief, ageHours } = state.ws.case;
   const paths = state.ws.paths || [];
-  const hasAnalysis = !!state.ws.analysisReady;
+  // A case analysis only counts for the case it was made for.
+  const ca = state.ws.caseAnalysis && state.ws.caseAnalysis.caseNumber === number ? state.ws.caseAnalysis : null;
+  const hasAnalysis = !!ca || !!state.ws.analysisReady;
+  const analysisStale = ca ? !!ca.stale : !!state.ws.analysisStale;
 
   const items = [];
   if (number) {
@@ -2348,11 +2461,16 @@ function renderHandoff() {
   }
 
   if (hasAnalysis) {
+    const label = ca
+      ? `Case analysis for ${esc(ca.caseNumber)} <span class="muted">(${ca.files.length} related file${
+          ca.files.length === 1 ? "" : "s"
+        }, ${ca.wikiPages.length} wiki page${ca.wikiPages.length === 1 ? "" : "s"})</span>`
+      : `Stored analysis`;
     items.push({
       ok: true,
-      html: state.ws.analysisStale
-        ? `Stored analysis <span class="muted">(stale — files changed since; re-run Analyze in phase 2)</span>`
-        : `Stored analysis <span class="muted">(current)</span>`,
+      html: analysisStale
+        ? `${label} <span class="muted">(stale — changed since; re-run Analyze in phase 2)</span>`
+        : `${label} <span class="muted">(current)</span>`,
     });
   } else {
     items.push({ ok: false, html: `No stored analysis — click <strong>Analyze</strong> in phase 2.` });
@@ -2454,11 +2572,19 @@ async function runFixPlan() {
         const src = document.createElement("li");
         src.className = "ws-source";
         src.textContent = d.hasAnalysis
-          ? `using the stored workspace analysis (${d.analysisFiles} file${d.analysisFiles === 1 ? "" : "s"}, ${
+          ? `using the stored ${d.analysisMode === "case" ? "case" : "workspace"} analysis (${d.analysisFiles} file${d.analysisFiles === 1 ? "" : "s"}, ${
               d.analysisStale ? "stale — files changed since" : "current"
             })`
           : "no stored analysis — orienting from the files directly";
         activity.appendChild(src);
+        if ((d.wikiPages || []).length) {
+          const w = document.createElement("li");
+          w.className = "ws-source";
+          w.textContent = `with ${d.wikiPages.length} team wiki page${d.wikiPages.length === 1 ? "" : "s"}: ${d.wikiPages
+            .map((p) => p.path.split("/").pop())
+            .join(", ")}`;
+          activity.appendChild(w);
+        }
       },
       tool: (d) => {
         const li = document.createElement("li");
@@ -2528,6 +2654,18 @@ async function runFixPlan() {
  * matches the file on disk, because that — plus this review and the pre-write
  * backup — is what makes applying safe.
  */
+/** The team-wiki pages behind a plan: the ones it cited, else the ones it was given. */
+function wikiRefsHtml(plan) {
+  const pages = plan.wikiPages || [];
+  if (!pages.length) return "";
+  const cited = new Set(plan.references || []);
+  const shown = cited.size ? pages.filter((p) => cited.has(p.path)) : pages;
+  const label = cited.size ? "Based on the team wiki:" : "Team wiki pages it was given (none cited):";
+  return `<div class="ws-plan-note"><strong>${label}</strong> ${shown
+    .map((p) => `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.path)}</a>`)
+    .join(" · ")}</div>`;
+}
+
 function renderFixPlan(plan, planError, incomplete) {
   const box = $("#wsFixPlan");
 
@@ -2654,6 +2792,7 @@ function renderFixPlan(plan, planError, incomplete) {
     ${section("Not fixed:", plan.notFixed)}
     ${section("Risks:", plan.risks)}
     ${section("Assumptions:", plan.assumptions)}
+    ${wikiRefsHtml(plan)}
     ${plan.edits.length ? plan.edits.map(editHtml).join("") : `<p class="caveat">The plan proposes no edits — read the reasoning above for what it would need.</p>`}
     ${
       !done && applicable.length

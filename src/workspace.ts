@@ -62,7 +62,7 @@ function pathKey(i: number): string {
 /** Default top-level file cap. Above this the caller must ask the user first. */
 const DEFAULT_FILE_CAP = 10;
 /** Files bigger than this would eat the child's context for one file. */
-const MAX_FILE_BYTES = 512 * 1024;
+export const MAX_FILE_BYTES = 512 * 1024;
 /** Stop reading dirents past this — bounds any mistake the denylist missed. */
 const MAX_ENTRIES = 2000;
 
@@ -269,10 +269,10 @@ const TEXT_NAMES = new Set([
 ]);
 
 /** Files that may hold credentials. Counted, never listed, never sent to a child. */
-const SECRET_RE = /^\.env($|\.)|\.(pem|key|pfx|p12|crt|cer|der|jks|keystore|ppk)$|^id_(rsa|dsa|ecdsa|ed25519)/i;
+export const SECRET_RE = /^\.env($|\.)|\.(pem|key|pfx|p12|crt|cer|der|jks|keystore|ppk)$|^id_(rsa|dsa|ecdsa|ed25519)/i;
 
 /** Directories that are build output, dependencies, or tooling state. */
-const SKIP_DIRS = new Set([
+export const SKIP_DIRS = new Set([
   ".git", "node_modules", "dist", "build", "out", "target", ".next", ".nuxt",
   ".svelte-kit", ".venv", "venv", "env", "__pycache__", ".pytest_cache",
   ".mypy_cache", ".tox", "bin", "obj", "coverage", ".cache", ".parcel-cache",
@@ -308,7 +308,7 @@ export interface EnumResult {
   skipped: EnumSkipped;
 }
 
-function isTextFile(name: string): boolean {
+export function isTextFile(name: string): boolean {
   const lower = name.toLowerCase();
   if (TEXT_NAMES.has(lower)) return true;
   const ext = extname(lower);
@@ -441,8 +441,29 @@ export function enumerateWorkspaces(dirs: string[]): MultiEnumResult {
 // Artifact store
 // ---------------------------------------------------------------------------
 
-export type AnalysisMode = "directory" | "file";
+/**
+ * `case` is a case-scoped analysis: only the files the app ranked as related to
+ * one bound case (searched recursively), plus the team-wiki pages that match
+ * it. `target` is the SR number.
+ */
+export type AnalysisMode = "directory" | "file" | "case";
 export type AnalysisStatus = "complete" | "stopped" | "timeout";
+
+/** One file the case-scoped selection picked, and why. */
+export interface CaseSelection {
+  /** Forward-slash path relative to `folder` — "EP-JAM/ReportCard.cfm". */
+  rel: string;
+  folder: string;
+  score: number;
+  reason: string;
+}
+
+/** A team-wiki page fed into a case-scoped analysis. */
+export interface WikiRef {
+  path: string;
+  url: string;
+  why: string;
+}
 
 export interface AnalysisMeta {
   version: 1;
@@ -469,6 +490,16 @@ export interface AnalysisMeta {
   usage: { costUsd?: number; totalTokens?: number };
   status: AnalysisStatus;
   report: string;
+  /** Case mode only: the ranked files handed to the analysis. */
+  selection?: CaseSelection[];
+  /** Case mode only: the team-wiki pages handed to the analysis. */
+  wikiPages?: WikiRef[];
+  /** Case mode only: the sanitized keywords the selection was ranked by. */
+  terms?: string[];
+  /** Case mode only: when the brief used for the selection was fetched. */
+  briefFetchedAt?: string;
+  /** Case mode only: why the wiki wasn't consulted, when it wasn't. */
+  wikiSkipped?: string;
 }
 
 export interface IndexFileEntry {
@@ -493,6 +524,8 @@ export interface IndexEntry {
     status: AnalysisStatus;
   } | null;
   files: IndexFileEntry[];
+  /** Case-scoped analyses, keyed by SR number in `name`. Absent on old indexes. */
+  cases?: IndexFileEntry[];
 }
 
 interface IndexDoc {
@@ -569,6 +602,18 @@ function artifactPaths(meta: Pick<AnalysisMeta, "slug" | "mode" | "target">): {
   relMd: string;
   relJson: string;
 } {
+  if (meta.mode === "case") {
+    // The target is a validated SR number, so it's already a safe file name.
+    const n = /^SR\d{4,12}$/.test(meta.target || "") ? meta.target! : slugForFile(meta.target || "case");
+    const dir = join(ANALYSIS_DIR, meta.slug, "cases");
+    return {
+      dir,
+      md: join(dir, `${n}.md`),
+      json: join(dir, `${n}.json`),
+      relMd: relPath(meta.slug, "cases", `${n}.md`),
+      relJson: relPath(meta.slug, "cases", `${n}.json`),
+    };
+  }
   if (meta.mode === "file") {
     const fs = slugForFile(meta.target || "file");
     const dir = join(ANALYSIS_DIR, meta.slug, "files");
@@ -843,7 +888,7 @@ function upsertIndex(meta: AnalysisMeta, paths: { relMd: string; relJson: string
       status: meta.status,
     };
   } else {
-    const name = meta.target || "file";
+    const name = meta.target || meta.mode;
     const row: IndexFileEntry = {
       name,
       report: paths.relMd,
@@ -852,10 +897,11 @@ function upsertIndex(meta: AnalysisMeta, paths: { relMd: string; relJson: string
       status: meta.status,
       truncated: meta.truncated,
     };
-    const i = entry.files.findIndex((f) => f.name === name);
-    if (i === -1) entry.files.push(row);
-    else entry.files[i] = row;
-    entry.files.sort((a, b) => a.name.localeCompare(b.name));
+    const list = meta.mode === "case" ? (entry.cases ||= []) : entry.files;
+    const i = list.findIndex((f) => f.name === name);
+    if (i === -1) list.push(row);
+    else list[i] = row;
+    list.sort((a, b) => a.name.localeCompare(b.name));
   }
 
   doc.updatedAt = new Date().toISOString();

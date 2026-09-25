@@ -79,7 +79,12 @@ import {
   type AnalysisMode,
   type MultiEnumResult,
 } from "./workspace.js";
-import { analyzeWorkspace } from "./analyzeWorkspace.js";
+import { analyzeWorkspace, type CaseScopeInput } from "./analyzeWorkspace.js";
+import { computeCaseScope, scopeSummary, type CaseScope } from "./caseScope.js";
+import { isCaseAnalysisStale, withCaseFiles } from "./caseFiles.js";
+import { getWikiPage, testWiki } from "./adoWiki.js";
+import { clipWikiPages } from "./wikiSelect.js";
+import type { CaseBrief } from "./caseBrief.js";
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "public");
 const PORT = parseInt(process.env.CREATIO_APP_PORT || "3000", 10);
@@ -148,6 +153,67 @@ async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> 
   } catch {
     res.writeHead(404, { "Content-Type": "text/plain" }).end("Not found");
   }
+}
+
+// ---------------------------------------------------------------------------
+// Case-scoped workspace helpers
+// ---------------------------------------------------------------------------
+
+/** The bound case and its brief, or a user-facing reason there isn't one. */
+function boundBrief(): { brief: CaseBrief } | { error: string } {
+  const number = getBoundCase();
+  if (!number) return { error: "No case is bound. Pick one in phase 1 first." };
+  const brief = loadBrief(number);
+  if (!brief) {
+    return {
+      error: `${number} is bound but nothing is stored for it. Search for it in phase 1 and pick it again to fetch the details.`,
+    };
+  }
+  return { brief };
+}
+
+/**
+ * The census a fix for `caseNumber` may edit: the top-level files plus the
+ * files that case's scoped analysis selected in subfolders.
+ */
+function editableEnumeration(abs: string[], caseNumber: string | null): MultiEnumResult {
+  const en = enumerateWorkspaces(abs);
+  const ca = caseNumber ? loadAnalysisFor(abs, "case", caseNumber) : null;
+  return withCaseFiles(en, ca?.meta.selection, abs);
+}
+
+/** Re-load wiki pages a stored case analysis used (from the 24h cache when fresh). */
+async function wikiForAnalysis(refs: { path: string; url: string; why: string }[] | undefined) {
+  const pages = await Promise.all(
+    (refs || []).map(async (r) => {
+      try {
+        const page = await getWikiPage(r.path);
+        return { ...r, content: page.content };
+      } catch {
+        return null;
+      }
+    })
+  );
+  return clipWikiPages(pages.filter((p): p is NonNullable<typeof p> => Boolean(p)));
+}
+
+function toScopeInput(scope: CaseScope, brief: CaseBrief): CaseScopeInput {
+  return {
+    caseNumber: scope.caseNumber,
+    terms: scope.terms.map((t) => t.term),
+    files: scope.files.map((f) => ({
+      rel: f.rel,
+      folder: f.folder,
+      score: f.score,
+      reason: f.reason,
+      size: f.size,
+      mtime: f.mtime,
+      ext: f.ext,
+    })),
+    wiki: clipWikiPages(scope.wiki).map((w) => ({ path: w.path, url: w.url, why: w.why, content: w.content })),
+    wikiSkipped: scope.wikiSkipped,
+    briefFetchedAt: brief.fetchedAt,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +360,12 @@ async function handleApi(
     return;
   }
 
+  // Settings: can the Azure CLI login read the team wiki?
+  if (req.method === "GET" && path === "/api/wiki/test") {
+    sendJson(res, 200, await testWiki());
+    return;
+  }
+
   // AI analysis of a set of cases — streams the model output via SSE.
   if (req.method === "POST" && path === "/api/analyze") {
     await handleAnalyze(req, res);
@@ -330,6 +402,21 @@ async function handleApi(
           } catch {
             /* enumeration problems surface on /files */
           }
+        }
+        // The bound case's scoped analysis, if one exists for these folders.
+        const number = getBoundCase();
+        const ca = number ? loadAnalysisFor(abs, "case", number) : null;
+        if (ca) {
+          const brief = loadBrief(number);
+          body.caseAnalysis = {
+            caseNumber: number,
+            finishedAt: ca.meta.finishedAt,
+            files: ca.meta.selection || [],
+            wikiPages: ca.meta.wikiPages || [],
+            wikiSkipped: ca.meta.wikiSkipped || null,
+            truncated: ca.meta.truncated,
+            stale: isCaseAnalysisStale(ca.meta, brief?.fetchedAt),
+          };
         }
       } catch (e) {
         body.error = e instanceof Error ? e.message : String(e);
@@ -421,12 +508,43 @@ async function handleApi(
       const abs = (qp.length ? qp : getWorkspacePaths()).map(validateWorkspacePath);
       const mode = (url.searchParams.get("mode") || "directory") as AnalysisMode;
       const file = url.searchParams.get("file") || undefined;
-      const loaded = loadAnalysisFor(abs, mode === "file" ? "file" : "directory", file);
+      const loaded = loadAnalysisFor(
+        abs,
+        mode === "file" || mode === "case" ? mode : "directory",
+        mode === "case" ? getBoundCase() : file
+      );
       if (!loaded) {
         sendJson(res, 404, { error: "not_found", message: "No stored analysis for that folder." });
         return;
       }
       sendJson(res, 200, { meta: loaded.meta, markdown: loaded.body });
+    } catch (e) {
+      if (e instanceof WorkspacePathError) {
+        sendJson(res, 400, { error: "path", message: e.message });
+        return;
+      }
+      sendError(res, e);
+    }
+    return;
+  }
+
+  // Instant, model-free preview of what a case-scoped analysis would read:
+  // the case keywords, the related files (searched recursively) and the
+  // matching team-wiki pages.
+  if (req.method === "GET" && path === "/api/workspace/case-scope") {
+    try {
+      const bb = boundBrief();
+      if ("error" in bb) {
+        sendJson(res, 400, { error: "case", message: bb.error });
+        return;
+      }
+      const abs = getWorkspacePaths().map(validateWorkspacePath);
+      if (!abs.length) {
+        sendJson(res, 400, { error: "path", message: "No workspace folder configured." });
+        return;
+      }
+      const scope = await computeCaseScope(bb.brief, abs, { wiki: url.searchParams.get("wiki") !== "0" });
+      sendJson(res, 200, scopeSummary(scope));
     } catch (e) {
       if (e instanceof WorkspacePathError) {
         sendJson(res, 400, { error: "path", message: e.message });
@@ -588,7 +706,7 @@ async function handleApi(
     if (plan) {
       try {
         const abs = getWorkspacePaths().map(validateWorkspacePath);
-        if (abs.length) plan = recheckPlan(plan, enumerateWorkspaces(abs), abs);
+        if (abs.length) plan = recheckPlan(plan, editableEnumeration(abs, plan.caseNumber), abs);
       } catch {
         /* unreadable workspace — hand back the stored plan as-is */
       }
@@ -617,7 +735,8 @@ async function handleApi(
         sendJson(res, 400, { error: "path", message: "No workspace folder configured." });
         return;
       }
-      const result = applyPlan(id, enumerateWorkspaces(abs), abs, {
+      const caseNumber = /^SR\d{4,12}(?=-)/.exec(id)?.[0] || null;
+      const result = applyPlan(id, editableEnumeration(abs, caseNumber), abs, {
         reapply: requestBody.reapply === true,
       });
       sendJson(res, 200, { applied: result.applied, backupDir: result.backupDir });
@@ -892,11 +1011,36 @@ async function handleWorkspaceAnalyze(req: IncomingMessage, res: ServerResponse)
     return sendError(res, e);
   }
 
-  const mode: AnalysisMode = body.mode === "file" ? "file" : "directory";
+  const mode: AnalysisMode = body.mode === "file" ? "file" : body.mode === "case" ? "case" : "directory";
   let target: string | undefined;
   let targetFolder: string | undefined;
+  let scope: CaseScope | undefined;
+  let scopeInput: CaseScopeInput | undefined;
 
-  if (mode === "file") {
+  if (mode === "case") {
+    // The case scope is computed here, before the stream opens, so a missing
+    // case or an empty selection is a normal JSON error. The cap is not
+    // checked: the selection is already bounded by it.
+    const bb = boundBrief();
+    if ("error" in bb) return sendJson(res, 400, { error: "case", message: bb.error });
+    try {
+      scope = await computeCaseScope(bb.brief, abs);
+    } catch (e) {
+      return sendError(res, e);
+    }
+    if (!scope.files.length) {
+      return sendJson(res, 400, {
+        error: "no_match",
+        message:
+          `No files in the workspace matched ${bb.brief.number}'s keywords (${scope.terms
+            .slice(0, 6)
+            .map((t) => t.term)
+            .join(", ") || "none found"}). Analyze the whole folder instead, or add the folder that holds this school's files.`,
+        scope: scopeSummary(scope),
+      });
+    }
+    scopeInput = toScopeInput(scope, bb.brief);
+  } else if (mode === "file") {
     // Exact match against the enumeration — never join a raw name onto a path.
     // This is also what disposes of any "../" concern.
     target = typeof body.file === "string" ? body.file : "";
@@ -942,11 +1086,12 @@ async function handleWorkspaceAnalyze(req: IncomingMessage, res: ServerResponse)
     mode,
     target: target || null,
     targetFolder: targetFolder || null,
-    count: mode === "file" ? 1 : en.count,
+    count: mode === "file" ? 1 : mode === "case" ? scope!.files.length : en.count,
     cap: en.cap,
     overCap: en.overCap,
     skipped: en.skipped,
   });
+  if (scope) sse(res, "scope", scopeSummary(scope));
 
   // A tool-using run can sit silent for a minute while the model reads files.
   // A bare SSE comment keeps proxies and the fetch reader alive; the client's
@@ -966,6 +1111,7 @@ async function handleWorkspaceAnalyze(req: IncomingMessage, res: ServerResponse)
       targetFolder,
       enumeration: en,
       proceededOverCap: mode === "directory" && en.overCap && Boolean(body.force),
+      caseScope: scopeInput,
       signal: controller.signal,
     },
     {
@@ -1054,7 +1200,8 @@ async function handleFixPlan(req: IncomingMessage, res: ServerResponse): Promise
     if (!abs.length) {
       return sendJson(res, 400, { error: "path", message: "No workspace folder configured." });
     }
-    en = enumerateWorkspaces(abs);
+    // Includes the case analysis's selected subfolder files, so they're editable.
+    en = editableEnumeration(abs, number);
   } catch (e) {
     if (e instanceof WorkspacePathError) {
       return sendJson(res, 400, { error: "path", message: e.message });
@@ -1073,15 +1220,22 @@ async function handleFixPlan(req: IncomingMessage, res: ServerResponse): Promise
   // is for, so the run spends its budget reading the right files rather than
   // rediscovering the layout. Staleness is passed through so it can be weighed
   // rather than silently trusted.
-  const stored = loadAnalysisFor(abs, "directory");
+  //
+  // The case-scoped analysis for this case wins when there is one: it was
+  // built from exactly the files this case touches, plus the team wiki.
+  const caseStored = loadAnalysisFor(abs, "case", number);
+  const stored = caseStored || loadAnalysisFor(abs, "directory");
   let analysisStale = false;
-  if (stored) {
+  if (caseStored) {
+    analysisStale = isCaseAnalysisStale(caseStored.meta, brief.fetchedAt);
+  } else if (stored) {
     try {
-      analysisStale = isStale(stored.meta, en);
+      analysisStale = isStale(stored.meta, enumerateWorkspaces(abs));
     } catch {
       /* enumeration already succeeded above; treat as current */
     }
   }
+  const wiki = caseStored ? await wikiForAnalysis(caseStored.meta.wikiPages) : [];
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
@@ -1097,6 +1251,8 @@ async function handleFixPlan(req: IncomingMessage, res: ServerResponse): Promise
     analysisGenerated: stored?.meta.finishedAt || null,
     analysisStale,
     analysisFiles: stored?.meta.filesAnalyzed.length || 0,
+    analysisMode: stored?.meta.mode || null,
+    wikiPages: wiki.map(({ path, url }) => ({ path, url })),
   });
 
   const heartbeat = setInterval(() => {
@@ -1114,6 +1270,7 @@ async function handleFixPlan(req: IncomingMessage, res: ServerResponse): Promise
       analysisMarkdown: stored?.body,
       analysisGenerated: stored?.meta.finishedAt,
       analysisStale,
+      wiki,
       signal: controller.signal,
     },
     {

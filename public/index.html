@@ -163,7 +163,20 @@
           <button id="wsClearBtn" class="secondary">Clear</button>
           <span id="wsStatus" class="status"></span>
         </div>
+        <!-- Shown only while a case is bound: Analyze then reads just the files
+             related to that case (searched in subfolders too) plus the matching
+             team-wiki pages. The whole-folder analysis stays one click away. -->
+        <p class="hint hidden" id="wsCaseModeHint">
+          With a case bound, <strong>Analyze</strong> reads only the files related to it
+          (subfolders included) plus the matching Custom Team wiki pages.
+          <button id="wsPreviewScopeBtn" class="link">Preview related files</button>
+          ·
+          <button id="wsAnalyzeAllBtn" class="link">Analyze whole folder instead</button>
+        </p>
       </section>
+
+      <!-- What a case-scoped analysis reads: files with reasons + wiki pages. -->
+      <section id="wsScope" class="card hidden"></section>
 
       <!-- File census + the over-cap choice -->
       <section id="wsFiles" class="card hidden"></section>
@@ -252,6 +265,21 @@
           <button id="saveCfgBtn" class="primary">Save</button>
           <button id="testCfgBtn" class="secondary">Test connection</button>
           <span id="cfgStatus" class="status"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Team wiki</h2>
+        <p class="hint">
+          Case-scoped analyses pull matching pages from the Custom Team wiki in Azure
+          DevOps, using your <strong>Azure CLI</strong> login (<code>az login</code>) — no
+          token is stored. Change the wiki with <code>ADO_WIKI_ORG</code>,
+          <code>ADO_WIKI_PROJECT</code> and <code>ADO_WIKI_ID</code> in <code>.env</code>, or
+          turn it off with <code>CREATIO_WIKI_ENABLED=false</code>.
+        </p>
+        <div class="actions">
+          <button id="testWikiBtn" class="secondary">Test wiki connection</button>
+          <span id="wikiStatus" class="status"></span>
         </div>
       </section>
     </main>
