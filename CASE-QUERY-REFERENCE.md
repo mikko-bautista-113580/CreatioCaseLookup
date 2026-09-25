@@ -14,7 +14,7 @@ Built from real queries — includes the gotchas that aren't obvious.
 - ⚠️ **Cookies expire in hours** and cannot auto-refresh. When reads start
   returning `401/403`, re-grab from browser DevTools → Application → Cookies
   (`.ASPXAUTH`, `BPMCSRF`, `BPMLOADER`) and update `.env`.
-- Verify auth quickly: `npm run test-auth` (exit 0 = good).
+- Verify auth quickly: `.venv\Scripts\python -m creatio_case_lookup.test_auth` (exit 0 = good).
 
 ### Required headers on every OData GET
 ```
@@ -54,25 +54,27 @@ Row cap `CREATIO_MAX_TOP=50`.
 > the new `--env CREATIO_ALLOWED_ENTITIES=...`. (See README "Register in Claude
 > Code".)
 
-### B. One-off Node script (works in the current session, bypasses MCP allowlist)
-Use when the MCP tools aren't loaded yet, or to touch an entity not in the
-allowlist. Reusable template — write to scratchpad, run with env sourced:
+### B. One-off Python script (works in the current session)
+Use when the MCP tools aren't loaded yet. It goes through the project's own
+read-only client, so the `.env` cookies, the allowlist and the `$top` clamp all
+apply. Write it to the scratchpad and run it from the repo root:
 
 ```bash
-set -a && . ./.env && set +a && node <script>
+.venv\Scripts\python <script>.py
 ```
 
-```js
-// creatio-query.mjs  — generic read-only OData GET
-const B=process.env.CREATIO_BASE_URL.replace(/\/+$/,'');
-const aspx=process.env.CREATIO_ASPXAUTH.replace(/^\.?ASPXAUTH=/i,'');
-const csrf=process.env.CREATIO_BPMCSRF.replace(/^BPMCSRF=/i,'');
-const loader=(process.env.CREATIO_BPMLOADER||'').replace(/^BPMLOADER=/i,'');
-const cookie=[`.ASPXAUTH=${aspx}`,`BPMCSRF=${csrf}`,loader&&`BPMLOADER=${loader}`].filter(Boolean).join('; ');
-const H={Accept:'application/json',Cookie:cookie,BPMCSRF:csrf};
-const get=async p=>{const r=await fetch(`${B}/0/odata/${p}`,{headers:H});
-  if(!r.ok){console.error('HTTP',r.status,(await r.text()).slice(0,300));return[];}
-  return (await r.json()).value||[];};
+```python
+# creatio_query.py — generic read-only OData GET via the project client
+import asyncio, json, sys
+sys.path.insert(0, r"C:\neldevsrc\Github\CreatioCaseLookup")
+from creatio_case_lookup.creatio_client import build_query, odata_get
+
+async def get(entity, **opts):
+    data = await odata_get(entity + build_query(opts))
+    return data.get("value", [])
+
+rows = asyncio.run(get("Case", filter="Number eq 'SR00026236'", select=["Id", "Number", "Subject"]))
+print(json.dumps(rows, indent=2, ensure_ascii=False))
 ```
 
 ---
@@ -85,6 +87,17 @@ Case?$filter=Number eq 'SR00026236'&$top=1
 Returns the full record. Key readable fields:
 `Id, Number, Subject, Symptoms (HTML), CreatedOn, ModifiedOn, RegisteredOn,
 ResponseDate, SolutionDate, SolutionOverdue, NltHoursWorked`.
+
+**Which client the case is about** — the Case info panel's codes. School code is
+on the Case; the SIS district code and institution ID live on the **Account**, so
+they come through `$expand`:
+```
+Case(<guid>)?$select=Id,NltSchoolCode
+  &$expand=Account($select=Name,NltDistrictCode,NltInstNum)
+```
+`Account.NltDistrictCode` (e.g. `EP-JAM`) usually names the district's folder in
+the report repos; the app stores these on the brief as `codes` and steers the
+case analysis and the fix to that folder.
 
 Get by GUID directly:
 ```
@@ -129,17 +142,17 @@ Useful fields: `Title, CreatedOn, Sender, Recepient` (note spelling),
 | **`$TMPDIR` not set in this shell** | Write scratch scripts to the session scratchpad path, not `$TMPDIR`. |
 
 ### HTML-strip helper (feed + email bodies)
-```js
-const strip=h=>(h||'')
-  .replace(/<style[\s\S]*?<\/style>/gi,'')
-  .replace(/<a[^>]*data-mention-display-value="([^"]*)"[^>]*>.*?<\/a>/gs,'@$1') // keep mention text
-  .replace(/<[^>]+>/g,' ')
-  .replace(/&nbsp;/g,' ').replace(/&#39;|&rsquo;/g,"'").replace(/&amp;/g,'&')
-  .replace(/&quot;|&ldquo;|&rdquo;/g,'"').replace(/&mdash;/g,'-')
-  .replace(/v\\?:\*|o\\?:\*|w\\?:\*|\.shape|\{behavior:url\(#default#VML\);\}/g,'')
-  .replace(/\s+/g,' ').trim();
-const trimReply=t=>t.split(/From:\s|On .{5,40} wrote:|Caution: This Message is From an External Sender/)[0].trim();
+Use the project's implementation rather than re-deriving it — it's the one the
+app and the stored briefs use:
+
+```python
+from creatio_case_lookup.case_lookup import strip, trim_reply
+text = trim_reply(strip(html))
 ```
+
+It removes `<style>` blocks, keeps @mention text, drops tags and Outlook VML
+junk, decodes the common entities, collapses whitespace, and cuts quoted reply
+history at `From:` / `On … wrote:` / `Caution: This Message is From an External Sender`.
 
 ---
 

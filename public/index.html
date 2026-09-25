@@ -137,9 +137,11 @@
           The folder you're working in — add up to <strong>3</strong>, and they're
           analyzed together as one workspace (useful when a fix spans a template and
           the includes it pulls in). Saved to the app's <code>.env</code>, effective
-          immediately with no restart. Analysis is <strong>read-only</strong>: Claude
-          may read, glob and grep these folders, and can neither edit files nor run
-          commands.
+          immediately with no restart. <strong>Analyze</strong> reads only the files
+          related to the bound case — found in subfolders too, using its district and
+          school codes and keywords — plus the matching Custom Team wiki pages. It is
+          <strong>read-only</strong>: Claude may read, glob and grep these folders, and
+          can neither edit files nor run commands.
         </p>
 
         <div class="field">
@@ -159,27 +161,19 @@
         <div class="actions">
           <button id="wsSaveBtn" class="primary">Save</button>
           <button id="wsAnalyzeBtn" class="primary">Analyze</button>
-          <button id="wsRescanBtn" class="secondary">Re-scan files</button>
           <button id="wsClearBtn" class="secondary">Clear</button>
           <span id="wsStatus" class="status"></span>
         </div>
-        <!-- Shown only while a case is bound: Analyze then reads just the files
-             related to that case (searched in subfolders too) plus the matching
-             team-wiki pages. The whole-folder analysis stays one click away. -->
-        <p class="hint hidden" id="wsCaseModeHint">
-          With a case bound, <strong>Analyze</strong> reads only the files related to it
-          (subfolders included) plus the matching Custom Team wiki pages.
-          <button id="wsPreviewScopeBtn" class="link">Preview related files</button>
-          ·
-          <button id="wsAnalyzeAllBtn" class="link">Analyze whole folder instead</button>
+        <!-- Analysis is case-scoped: it needs a bound case. The hint says which
+             case it will read for, or that one must be picked first. -->
+        <p class="hint" id="wsCaseModeHint">
+          <span id="wsCaseModeText">Pick a case in phase 1 first — analysis reads the files related to it.</span>
+          <button id="wsPreviewScopeBtn" class="link hidden">Preview related files</button>
         </p>
       </section>
 
       <!-- What a case-scoped analysis reads: files with reasons + wiki pages. -->
       <section id="wsScope" class="card hidden"></section>
-
-      <!-- File census + the over-cap choice -->
-      <section id="wsFiles" class="card hidden"></section>
 
       <!-- Live streaming analysis -->
       <section id="wsPanel" class="card analysis hidden"></section>
@@ -280,6 +274,21 @@
         <div class="actions">
           <button id="testWikiBtn" class="secondary">Test wiki connection</button>
           <span id="wikiStatus" class="status"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Team skills</h2>
+        <p class="hint">
+          Fix plans are built from the team's skills — <code>/Skills/&lt;name&gt;/SKILL.md</code>
+          in the Custom-Team repo — read through the same <strong>Azure CLI</strong> login.
+          Change the source with <code>ADO_SKILLS_REPO</code>, <code>ADO_SKILLS_PATH</code> and
+          <code>ADO_SKILLS_BRANCH</code> in <code>.env</code>, or turn it off with
+          <code>CREATIO_SKILLS_ENABLED=false</code>.
+        </p>
+        <div class="actions">
+          <button id="testSkillsBtn" class="secondary">Test skills repo</button>
+          <span id="skillsStatus" class="status"></span>
         </div>
       </section>
     </main>

@@ -13,7 +13,7 @@ A workspace is **one to three folders analyzed together as a single unit** —
 useful when a fix spans a report template and the shared includes it pulls in.
 
 The store, the file cap, and the artifact schema are owned by one module —
-`src/workspace.ts`, reached through `dist/workspaceCli.js`. Always go through
+`creatio_case_lookup/workspace.py`, reached through `creatio_case_lookup/workspace_cli.py`. Always go through
 that CLI. Never hand-write files into `.analysis/`: the app's Workspace tab
 writes the same artifacts, and hand-rolled JSON would drift from the schema and
 break both readers.
@@ -21,7 +21,7 @@ break both readers.
 ## Prerequisites
 
 - Run commands from the repo root (`C:\neldevsrc\Github\CreatioCaseLookup`).
-- The CLI needs a build. If `dist/workspaceCli.js` is missing, run `npm run build`.
+- The CLI needs the project's Python environment. If `.venv` is missing, create it: `python -m venv .venv` then `.venv/Scripts/python -m pip install -e .`
 - Everything here is **read-only**. This skill analyzes and records; it never
   edits the user's files. Applying a change is `creatio-case-fix`'s job, behind
   its own approval gate.
@@ -31,7 +31,7 @@ break both readers.
 ## Step 1 — Resolve the workspace folders
 
 ```
-node dist/workspaceCli.js path
+.venv/Scripts/python -m creatio_case_lookup.workspace_cli path
 ```
 
 - `{"paths":["..."],"set":true}` → use them. `maxPaths` says how many folders a
@@ -41,13 +41,13 @@ node dist/workspaceCli.js path
   app's **Workspace** tab. Then save it so the app and this skill agree:
 
 ```
-node dist/workspaceCli.js path "C:\path\to\project"
-node dist/workspaceCli.js path "C:\path\one" "C:\path\two"
+.venv/Scripts/python -m creatio_case_lookup.workspace_cli path "C:\path\to\project"
+.venv/Scripts/python -m creatio_case_lookup.workspace_cli path "C:\path\one" "C:\path\two"
 ```
 
 Saving **replaces the whole set**, so include every folder that should be kept.
 
-A case may also be bound (`node dist/workspaceCli.js case`). Name it for context
+A case may also be bound (`.venv/Scripts/python -m creatio_case_lookup.workspace_cli case`). Name it for context
 if so, but **do not let it change what gets analyzed**. This analysis is
 folder-scoped and case-independent on purpose — that is exactly what makes a
 stored report reusable across different cases. Tying a fix to a case is
@@ -65,7 +65,7 @@ and ask for a different path; don't try to repair the path yourself.
 ## Step 2 — Reuse, or refresh?
 
 ```
-node dist/workspaceCli.js scan
+.venv/Scripts/python -m creatio_case_lookup.workspace_cli scan
 ```
 
 The result includes a `stored` block when an analysis already exists:
@@ -85,8 +85,8 @@ The result includes a `stored` block when an analysis already exists:
 To read a stored report:
 
 ```
-node dist/workspaceCli.js load
-node dist/workspaceCli.js load --mode file --file app.js
+.venv/Scripts/python -m creatio_case_lookup.workspace_cli load
+.venv/Scripts/python -m creatio_case_lookup.workspace_cli load --mode file --file app.js
 ```
 
 A bound case can change **what** gets analyzed only through the case scope
@@ -103,13 +103,13 @@ Exit **4** means nothing is stored for that set of folders.
 
 ### When a case is bound: scope to the case instead
 
-If `node dist/workspaceCli.js case` exits **0** and the user's goal is working
+If `.venv/Scripts/python -m creatio_case_lookup.workspace_cli case` exits **0** and the user's goal is working
 that case, a whole-folder analysis is usually the wrong tool — it reads every
 top-level file whatever the case is about. Use the case scope instead:
 
 ```
-node dist/workspaceCli.js load --case <SRxxxxxxxx>   # stored case analysis, if any
-node dist/workspaceCli.js scope <SRxxxxxxxx>         # otherwise: files + wiki pages, no model
+.venv/Scripts/python -m creatio_case_lookup.workspace_cli load --case <SRxxxxxxxx>   # stored case analysis, if any
+.venv/Scripts/python -m creatio_case_lookup.workspace_cli scope <SRxxxxxxxx>         # otherwise: files + wiki pages, no model
 ```
 
 `scope` searches the folders **recursively**, ranks files by the case's keywords
@@ -117,7 +117,7 @@ node dist/workspaceCli.js scope <SRxxxxxxxx>         # otherwise: files + wiki p
 matches, then one hop of `<cfinclude>`), and keeps at most `cap` of them — so
 the cap is already applied and there is **no over-cap question** in this mode.
 It also returns the matching Custom Team wiki pages (read them with
-`workspaceCli wiki page "<path>"`). Read only the listed files. Full case
+`.venv/Scripts/python -m creatio_case_lookup.workspace_cli wiki page "<path>"`). Read only the listed files. Full case
 analyses (with the report stored) are produced by the app's **Analyze for
 SRxxxxxxxx** button; `save` stays directory/file only.
 
@@ -208,10 +208,10 @@ Folders are passed as repeatable `--path` flags — omit them to use the saved
 workspace. Mode and the target filename are positional.
 
 ```
-node dist/workspaceCli.js save directory < report.md
-node dist/workspaceCli.js save directory --path "C:\one" --path "C:\two" < report.md
-node dist/workspaceCli.js save file app.js < report.md
-node dist/workspaceCli.js save directory --over-cap < report.md
+.venv/Scripts/python -m creatio_case_lookup.workspace_cli save directory < report.md
+.venv/Scripts/python -m creatio_case_lookup.workspace_cli save directory --path "C:\one" --path "C:\two" < report.md
+.venv/Scripts/python -m creatio_case_lookup.workspace_cli save file app.js < report.md
+.venv/Scripts/python -m creatio_case_lookup.workspace_cli save directory --over-cap < report.md
 ```
 
 Write the report to a temp file and redirect it in, as above — don't try to embed

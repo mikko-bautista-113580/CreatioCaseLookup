@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "creatio-case-lookup"
+version = "0.2.0"
+description = "Read-only Creatio case lookup: MCP server, local web app and case-to-fix workflow."
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "httpx>=0.27",
+  "mcp>=1.2",
+]
+
+[project.optional-dependencies]
+# Browser login (Settings → "Log in with Creatio…"). Imported lazily, so the
+# app still runs without it — only that button stops working.
+login = ["playwright>=1.45"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+creatio-mcp = "creatio_case_lookup.mcp_server:main"
+creatio-app = "creatio_case_lookup.server:main"
+creatio-workspace = "creatio_case_lookup.workspace_cli:main"
+creatio-test-auth = "creatio_case_lookup.test_auth:main"
+
+[tool.setuptools]
+packages = ["creatio_case_lookup"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

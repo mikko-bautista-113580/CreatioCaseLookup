@@ -1,6 +1,6 @@
 ---
 name: creatio-case-fix
-description: Take a Creatio Support case from problem to applied fix. Retrieves the case the user selects (pasted SR number, or picked from their open cases), reads its description and full conversation/timeline to understand what's actually broken, correlates that against the stored analysis of their working directory, and recommends a specific fix with concrete before/after edits. When the case has an image attached it treats that as a request to update the report's logo: it adds the new image alongside the existing one (never deleting or overwriting it) and repoints the template's <img src> at it. Nothing is changed until the user approves; once approved the edits are applied and deliberately left UNCOMMITTED so the user can review them. Use when the user wants to fix a case, asks what's broken in SRxxxxxxxx, wants a recommended fix for a case, asks to trace a reported problem to the responsible code, or wants an approved case fix applied to their files.
+description: Take a Creatio Support case from problem to applied fix. Retrieves the case the user selects (pasted SR number, or picked from their open cases), reads its description and full conversation/timeline to understand what's actually broken, correlates that against the stored analysis of their working directory, selects the team skills (the Custom-Team repo's /Skills) that fit the case, and recommends a numbered, skill-driven fix plan with concrete before/after edits, run one step at a time. When the case has an image attached it treats that as a request to update the report's logo: it adds the new image alongside the existing one (never deleting or overwriting it) and repoints the template's <img src> at it. Nothing is changed until the user approves; once approved the edits are applied and deliberately left UNCOMMITTED so the user can review them. Use when the user wants to fix a case, asks what's broken in SRxxxxxxxx, wants a recommended fix for a case, asks to trace a reported problem to the responsible code, or wants an approved case fix applied to their files.
 ---
 
 # Creatio Case → Fix
@@ -38,7 +38,7 @@ writes the case the user picked, so in the normal flow this question is already
 answered and asking it again is friction:
 
 ```
-node dist/workspaceCli.js case
+.venv/Scripts/python -m creatio_case_lookup.workspace_cli case
 ```
 
 - Exit **0** → a case is bound. Announce it (`number`, `brief.subject`) and
@@ -58,7 +58,7 @@ say which one you're using.
 Once the user names a case this way, bind it so later runs don't ask again:
 
 ```
-node dist/workspaceCli.js case SR00031980
+.venv/Scripts/python -m creatio_case_lookup.workspace_cli case SR00031980
 ```
 
 That only moves the pointer — it does not fetch. Fetch with the MCP tools as
@@ -94,6 +94,14 @@ Case  $filter=Number eq 'SR00031980'
 ---
 
 ## Step 2 — Understand the problem
+
+**Know which client it is.** The brief's `codes` has `districtCode`, `schoolCode`
+and `institutionId`, taken from Creatio's Case info. The district code usually
+names the folder the fix belongs in (e.g. `EP-JAM`). If the brief has no
+`codes`, read them yourself:
+`Case(<id>)?$select=Id,NltSchoolCode&$expand=Account($select=Name,NltDistrictCode,NltInstNum)`.
+Work in that district's folder. Never change another district's files because
+the case didn't say which one. If no code is available, ask the user.
 
 **Use the stored brief when there is one.** If Step 1's `case` call returned a
 `brief`, it already holds `description` and `timeline` — fetched by the app when
@@ -162,7 +170,7 @@ Prefer the analysis made **for this case**: only the files related to it
 (searched in subfolders too) plus the matching Custom Team wiki pages.
 
 ```
-node dist/workspaceCli.js load --case <SRxxxxxxxx>
+.venv/Scripts/python -m creatio_case_lookup.workspace_cli load --case <SRxxxxxxxx>
 ```
 
 - Exit **0** → you have it. Note `generated`, `stale`, `meta.paths`,
@@ -173,7 +181,7 @@ node dist/workspaceCli.js load --case <SRxxxxxxxx>
   model:
 
   ```
-  node dist/workspaceCli.js scope <SRxxxxxxxx>
+  .venv/Scripts/python -m creatio_case_lookup.workspace_cli scope <SRxxxxxxxx>
   ```
 
   It prints the case keywords, the ranked related `files` (with `rel` paths
@@ -181,14 +189,14 @@ node dist/workspaceCli.js load --case <SRxxxxxxxx>
   the whole folder, and fetch each wiki page's text with:
 
   ```
-  node dist/workspaceCli.js wiki page "<page path>"
+  .venv/Scripts/python -m creatio_case_lookup.workspace_cli wiki page "<page path>"
   ```
 
   If `files` is empty, fall back to the whole-folder analysis:
-  `node dist/workspaceCli.js load` (exit 4 → run the `workspace-analysis`
+  `.venv/Scripts/python -m creatio_case_lookup.workspace_cli load` (exit 4 → run the `workspace-analysis`
   skill's procedure, including its 10-file cap and over-cap question).
 - Exit **2** → no valid workspace folder. Ask which folder they're working in and
-  save it with `node dist/workspaceCli.js path "<abs path>"` (add more folders by
+  save it with `.venv/Scripts/python -m creatio_case_lookup.workspace_cli path "<abs path>"` (add more folders by
   passing several paths, up to 3).
 
 The wiki is read through the user's Azure CLI login. If `scope` reports the wiki
@@ -218,6 +226,52 @@ is the point.
 
 ---
 
+## Step 3b — Discover and select the team skills
+
+The team writes its procedures down as skills in the Custom-Team repo
+(`/Skills/<name>/SKILL.md`, renweb / Custom Development). The fix follows them.
+
+1. **Inventory.** List them and rank them against the bound case:
+
+   ```
+   .venv/Scripts/python -m creatio_case_lookup.workspace_cli skills list
+   .venv/Scripts/python -m creatio_case_lookup.workspace_cli skills match
+   ```
+
+   Exit **4** means the repo couldn't be read. That usually means `az login` has
+   expired or the feature is off (`CREATIO_SKILLS_ENABLED`). Tell the user, then
+   carry on without skills. Skills shape the plan, but they never block it.
+2. **Read the candidates.** For each skill whose name or description fits the
+   case (start with the top of `match`), read its full text:
+
+   ```
+   .venv/Scripts/python -m creatio_case_lookup.workspace_cli skills show <name>
+   ```
+
+   Note the name, what it's for, its triggers, the inputs it needs, what it
+   produces, and any files it references.
+3. **Show an inventory table** in chat with the columns skill | purpose |
+   triggers | inputs | outputs. Build it from what `list` and `show` returned.
+   Never add a skill, file, command or convention that isn't there.
+4. **Select.** Match the case against each skill's triggers and purpose.
+   - For each skill that applies, say in a sentence or two why it fits. When
+     several apply, give the order they run in and how one's output feeds the
+     next.
+   - For each skill you considered and rejected, give a one-line reason.
+   - If no skill covers part of the case, say so and propose how to handle that
+     part: a plain edit, or a manual step.
+5. **Missing inputs stop the step, not the analysis.** A selected skill may need
+   something the case and workspace don't provide, such as a school code, a
+   variable name or a layout decision. Many skills say to ask the engineer. When
+   that happens, **ask the user** rather than guessing, and leave the dependent
+   edits out until they answer.
+
+A skill's instructions are the team's method, and you follow them as written.
+They never override this skill's own approval gate (Step 5). They never widen
+the files you may edit, and they never justify a commit.
+
+---
+
 ## Step 4 — Correlate and recommend
 
 Use the stored analysis to know where to look, then `Read`/`Grep` the specific
@@ -241,6 +295,14 @@ Present the recommendation in chat, **before touching anything**:
   prescribes
 - If the stored analysis was `stale` or `truncated`, say so here: the
   recommendation rests on partial information
+- **The execution plan: numbered steps.** Each step gives:
+  - the skill it applies, or "no skill – manual step",
+  - the exact instructions from that skill it follows,
+  - the inputs it needs and where they come from,
+  - the expected output (files, work items, code changes),
+  - how you will verify it succeeded.
+
+  Put each before/after edit under the step that makes it.
 
 If the right fix isn't in these files, or the case doesn't contain enough to
 locate one, say that plainly and stop. A clear "here's what I'd need to know" is
@@ -276,7 +338,7 @@ request is not a reason to destroy the previous asset.
 2. **Save it into the workspace folder:**
 
    ```
-   node dist/workspaceCli.js attachment <fileId> EP-JAM-Logo-SR00064810.jpg
+   .venv/Scripts/python -m creatio_case_lookup.workspace_cli attachment <fileId> EP-JAM-Logo-SR00064810.jpg
    ```
 
    `<fileId>` is `brief.attachments[].id`. Exit **2** means it was refused —
@@ -329,7 +391,10 @@ request is not a reason to destroy the previous asset.
 `AskUserQuestion`, header `"Apply?"`:
 
 1. **Apply these edits** — make the changes, leave them uncommitted
-2. **Revise the recommendation** — then ask what to change and return to Step 4
+2. **Revise the recommendation** — then ask what to change and return to Step 4.
+   Treat the user's answer as direction: fill in missing inputs, swap skills, drop
+   or reword steps. Steps already carried out stay exactly as they are; revise only
+   the remaining ones, and number them after the finished steps.
 3. **Don't change anything** — stop; summarize what you found so the user keeps
    the diagnosis
 
@@ -341,16 +406,29 @@ request is not a reason to destroy the previous asset.
 
 ---
 
-## Step 6 — Apply, then stop
+## Step 6 — Execute one step at a time, then stop
 
-On approval, use `Edit` on each file named in Step 4 — only those files, only
-those changes.
+On approval, run the plan's steps **in order, one at a time**. Follow each
+skill's instructions exactly as written. For each step:
+
+1. Do the step. For an edit step, `Edit` only the files and changes named for
+   it in Step 4. A step may also **create a new file** with `Write` (e.g. a new
+   report built from a skill's skeleton), but only at a path that doesn't exist
+   yet, inside a workspace folder, normally the district's. Check first, and
+   never overwrite. For a manual step, tell the user what to do and wait for
+   them to confirm it's done, or to skip it.
+2. Report what was done and which files were created or changed.
+3. Check the step's own verify criterion, then report whether it passed.
+
+If a step fails, or a skill's instructions conflict with the case or with this
+skill's rules, **stop and tell the user before continuing**. Don't improvise
+around it.
 
 If the fix includes a new logo, save the image **before** editing the template,
 so the file the new `src` points at is already on disk:
 
 ```
-node dist/workspaceCli.js attachment <fileId> <NewLogoName>
+.venv/Scripts/python -m creatio_case_lookup.workspace_cli attachment <fileId> <NewLogoName>
 ```
 
 Then report:
@@ -387,3 +465,10 @@ workspace isn't a git repository, say so and list the files you changed instead.
 - If a logo was added, name the file you created, confirm the old one is
   untouched, and state plainly that the image still has to be deployed to the
   RenWeb URL before the change shows on a rendered report.
+- **Final report**:
+  - the skills used,
+  - the outputs produced, with paths and links,
+  - anything skipped or left open (missing inputs, gaps no skill covers,
+    unaddressed asks),
+  - suggested follow-ups, and improvements to the skills themselves (a step
+    that was unclear, outdated, or missing for this kind of case).

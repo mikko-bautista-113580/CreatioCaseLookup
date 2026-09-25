@@ -1078,6 +1078,23 @@ async function testWikiConn() {
 }
 $("#testWikiBtn").addEventListener("click", testWikiConn);
 
+async function testSkillsConn() {
+  const s = $("#skillsStatus");
+  s.innerHTML = '<span class="spinner"></span> Reading the skills repo…';
+  s.className = "status";
+  try {
+    const r = await api("/api/skills/test");
+    s.textContent = r.message;
+    s.className = "status " + (r.ok ? "ok" : "err");
+    // The probe refreshed the server's cache; let phase 3 pick it up.
+    state.ws.skillsInfo = undefined;
+  } catch (e) {
+    s.textContent = e.message;
+    s.className = "status err";
+  }
+}
+$("#testSkillsBtn").addEventListener("click", testSkillsConn);
+
 // Interactive browser login — opens a real browser at Creatio's login page and
 // captures the session cookies when the user finishes signing in. Progress
 // arrives over SSE because the sign-in (with MFA) can take minutes.
@@ -1229,6 +1246,7 @@ async function loadWorkspace() {
     state.ws.maxPaths = data.maxPaths || 3;
     renderPathRows(state.ws.paths);
 
+    state.ws.aiAvailable = !!data.aiAvailable;
     if (!data.aiAvailable) {
       $("#wsAnalyzeBtn").disabled = true;
       wsSetStatus("");
@@ -1319,7 +1337,7 @@ async function saveWorkspace() {
     applyCensus(data.enumeration);
     // A different folder set has its own stored report.
     const info = await api("/api/workspace");
-    renderStored(info.analysis, info.stale);
+    renderStored(info.analysis, info.stale, state.ws.caseAnalysis);
   } catch (e) {
     wsSetHint(e.message, true);
   } finally {
@@ -1360,7 +1378,7 @@ async function clearWorkspace() {
   });
 
   renderPathRows([]);
-  for (const id of ["#wsFiles", "#wsScope", "#wsStored", "#wsPanel", "#wsFixPanel", "#wsFixPlan"]) {
+  for (const id of ["#wsScope", "#wsStored", "#wsPanel", "#wsFixPanel", "#wsFixPlan"]) {
     const el = $(id);
     el.classList.add("hidden");
     el.innerHTML = "";
@@ -1370,12 +1388,16 @@ async function clearWorkspace() {
   renderHandoff();
 }
 
+/**
+ * Refresh the file census. It isn't shown any more — analysis is case-scoped
+ * and finds the related files itself — but the counts still label runs and
+ * feed staleness, so it's kept in state.
+ */
 async function rescan() {
   try {
     const en = await api("/api/workspace/files");
     applyCensus(en);
   } catch (e) {
-    $("#wsFiles").classList.add("hidden");
     wsSetHint(e.message, true);
   }
 }
@@ -1390,99 +1412,15 @@ function applyCensus(en) {
     overCap: !!en.overCap,
     skipped: en.skipped || null,
   });
-  renderCensus();
 }
 
-function renderCensus() {
-  const box = $("#wsFiles");
-  const { files, folders, count, cap, overCap, skipped } = state.ws;
-  if (!state.ws.paths.length) {
-    box.classList.add("hidden");
-    return;
-  }
-  box.classList.remove("hidden");
-
-  const pills = [];
-  if (skipped?.secrets)
-    pills.push(
-      `<span class="pill warn" title="Files that may hold credentials are never read">⚠ ${skipped.secrets} secret-bearing file(s) excluded</span>`
-    );
-  if (skipped?.binaries) pills.push(`<span class="pill">${skipped.binaries} non-text skipped</span>`);
-  if (skipped?.oversized) pills.push(`<span class="pill">${skipped.oversized} too large</span>`);
-  if (skipped?.entriesTruncated)
-    pills.push(`<span class="pill warn">⚠ folder listing truncated</span>`);
-
-  // Group the list by folder when there's more than one.
-  let list;
-  if (!count) {
-    list = `<p class="hint">No top-level source or text files in ${folders.length > 1 ? "these folders" : "this folder"}.</p>`;
-  } else {
-    const groups = (folders.length ? folders : [{ path: state.ws.paths[0], files, dirs: [] }])
-      .filter((f) => f.files?.length)
-      .map(
-        (f) => `
-        ${folders.length > 1 ? `<p class="ws-folder-head"><code>${esc(f.path)}</code> · ${f.files.length} file${f.files.length === 1 ? "" : "s"}</p>` : ""}
-        <dl>${f.files
-          .map((x) => `<dt>${esc(x.name)}</dt><dd>${x.size.toLocaleString()} bytes</dd>`)
-          .join("")}</dl>`
-      )
-      .join("");
-    list = `<details class="ws-file-list">
-        <summary>${count} top-level source file${count === 1 ? "" : "s"}${folders.length > 1 ? ` across ${folders.length} folders` : ""}</summary>
-        ${groups}
-      </details>`;
-  }
-
-  const allDirs = (folders || []).flatMap((f) => (f.dirs || []).map((d) => d));
-  const subdirs = allDirs.length
-    ? `<p class="hint">Subdirectories (not counted): ${allDirs.map((d) => esc(d)).join(", ")}</p>`
-    : "";
-
-  const choice = overCap
-    ? `<div class="ws-choice" id="wsChoice">
-         <p class="caveat">⚠ ${count} top-level files${folders.length > 1 ? ` across ${folders.length} folders` : ""} — more than the ${cap}-file quick-analysis limit.
-            A full analysis will take noticeably longer and cost more.</p>
-         <div class="row wrap">
-           <button id="wsAll" class="secondary">Analyze all ${count} anyway</button>
-           <span class="muted">or analyze just one file:</span>
-           <select id="wsOne">
-             <option value="">Pick a file…</option>
-             ${files
-               .map(
-                 (f, i) =>
-                   `<option value="${i}">${esc(f.name)}${folders.length > 1 ? ` — ${esc(String(f.folder || "").split(/[\\/]/).pop() || "")}` : ""}</option>`
-               )
-               .join("")}
-           </select>
-           <button id="wsOneGo" class="secondary" disabled>Analyze this file</button>
-         </div>
-       </div>`
-    : "";
-
-  box.innerHTML = `<h2>Files</h2>${pills.length ? `<div class="chips">${pills.join("")}</div>` : ""}${list}${subdirs}${choice}`;
-
-  if (overCap) {
-    $("#wsAll").addEventListener("click", () =>
-      runWorkspaceAnalysis({ mode: "directory", force: true })
-    );
-    const sel = $("#wsOne");
-    const go = $("#wsOneGo");
-    sel.addEventListener("change", () => (go.disabled = sel.value === ""));
-    go.addEventListener("click", () => {
-      if (sel.value === "") return;
-      // Index into the census, so a name that exists in two folders is unambiguous.
-      const f = files[Number(sel.value)];
-      if (f) runWorkspaceAnalysis({ mode: "file", file: f.name, folder: f.folder });
-    });
-  }
-}
-
+/** The stored analysis for the bound case. Whole-folder and single-file analyses
+ * (still made by the CLI and the workspace-analysis skill) aren't listed: the
+ * app works case by case. */
 function renderStored(analysis, stale, caseAnalysis) {
   const box = $("#wsStored");
-  const dir = analysis?.directory;
-  const files = analysis?.files || [];
-  const ca = caseAnalysis || null;
-  if (!dir && !files.length && !ca) {
+  const ca = caseAnalysis && caseAnalysis.caseNumber === state.ws.case.number ? caseAnalysis : null;
+  if (!ca) {
     box.classList.add("hidden");
     box.innerHTML = "";
     return;
@@ -1497,18 +1435,6 @@ function renderStored(analysis, stale, caseAnalysis) {
          <span class="muted">· ${fmtDate(ca.finishedAt)} · ${ca.files.length} related file${ca.files.length === 1 ? "" : "s"} · ${
            w ? `${w} wiki page${w === 1 ? "" : "s"}` : "no wiki pages"
          }${ca.truncated ? " · ⚠ partial" : ""}${ca.stale ? " · ⚠ changed since" : ""}</span></li>`
-    );
-  }
-  if (dir) {
-    rows.push(
-      `<li><button class="link" data-ws-open="directory">Whole workspace</button>
-         <span class="muted">· ${fmtDate(dir.finishedAt)} · ${dir.fileCount} file${dir.fileCount === 1 ? "" : "s"}${dir.truncated ? " · ⚠ partial" : ""}${stale ? " · ⚠ files changed since" : ""}</span></li>`
-    );
-  }
-  for (const f of files) {
-    rows.push(
-      `<li><button class="link" data-ws-open="file" data-ws-file="${esc(f.name)}">${esc(f.name)}</button>
-         <span class="muted">· ${fmtDate(f.finishedAt)}${f.truncated ? " · ⚠ partial" : ""}</span></li>`
     );
   }
 
@@ -1601,11 +1527,6 @@ async function runWorkspaceAnalysis(opts) {
       const data = await res.json().catch(() => ({}));
       // Nothing matched the case: show what was searched so the user can judge.
       if (data.error === "no_match" && data.scope) renderScope(data.scope);
-      // The server enforces the cap too — surface its choice prompt.
-      if (data.error === "over_cap") {
-        applyCensus({ ...state.ws, count: data.count, cap: data.cap, overCap: true, files: data.files });
-        throw new Error(data.message);
-      }
       throw new Error(data.message || `Analysis failed (${res.status})`);
     }
     await consumeSse(res.body, {
@@ -1670,17 +1591,16 @@ async function runWorkspaceAnalysis(opts) {
   } finally {
     state.ws.running = false;
     state.ws.abort = null;
-    $("#wsAnalyzeBtn").disabled = false;
+    updateAnalyzeControls();
   }
 }
 
 $("#wsAddPathBtn").addEventListener("click", addPathRow);
 $("#wsSaveBtn").addEventListener("click", saveWorkspace);
-$("#wsRescanBtn").addEventListener("click", rescan);
 $("#wsClearBtn").addEventListener("click", clearWorkspace);
 /**
- * Case-scoped vs whole-folder. With a case bound, the primary button analyzes
- * only what's related to that case; the whole-folder run is a link beside it.
+ * Analysis is case-scoped: it reads only the files related to the bound case,
+ * so the button needs one. With none bound it's disabled and the hint says why.
  */
 function caseModeActive() {
   return !!state.ws.case.number && !!state.ws.case.brief;
@@ -1688,8 +1608,17 @@ function caseModeActive() {
 
 function updateAnalyzeControls() {
   const on = caseModeActive();
-  $("#wsAnalyzeBtn").textContent = on ? `Analyze for ${state.ws.case.number}` : "Analyze";
-  $("#wsCaseModeHint").classList.toggle("hidden", !on || !state.ws.paths.length);
+  const btn = $("#wsAnalyzeBtn");
+  btn.textContent = on ? `Analyze for ${state.ws.case.number}` : "Analyze";
+  if (!state.ws.running) btn.disabled = !on || state.ws.aiAvailable === false;
+  const codes = (on && state.ws.case.brief.codes) || {};
+  const code = codes.districtCode || codes.schoolCode;
+  $("#wsCaseModeText").innerHTML = on
+    ? `<strong>Analyze</strong> reads only the files related to ${esc(state.ws.case.number)}${
+        code ? ` — the <code>${esc(code)}</code> folder first` : ""
+      } (subfolders included) plus the matching Custom Team wiki pages.`
+    : "Pick a case in phase 1 first — analysis reads the files related to it.";
+  $("#wsPreviewScopeBtn").classList.toggle("hidden", !on || !state.ws.paths.length);
   if (!on) {
     $("#wsScope").classList.add("hidden");
     $("#wsScope").innerHTML = "";
@@ -1742,25 +1671,9 @@ async function previewScope() {
 }
 
 $("#wsPreviewScopeBtn").addEventListener("click", previewScope);
-function analyzeWholeFolder() {
-  // Over the cap we never auto-run — the user has to make the call.
-  if (state.ws.overCap) {
-    const choice = $("#wsChoice");
-    if (choice) {
-      choice.scrollIntoView({ behavior: "smooth", block: "center" });
-      choice.classList.add("flash");
-      setTimeout(() => choice.classList.remove("flash"), 1200);
-    }
-    wsSetStatus("Choose how to proceed below.");
-    return;
-  }
-  runWorkspaceAnalysis({ mode: "directory" });
-}
-
-$("#wsAnalyzeAllBtn").addEventListener("click", analyzeWholeFolder);
 $("#wsAnalyzeBtn").addEventListener("click", () => {
   if (caseModeActive()) runWorkspaceAnalysis({ mode: "case" });
-  else analyzeWholeFolder();
+  else wsSetStatus("Pick a case in phase 1 first.");
 });
 
 // ---------------------------------------------------------------------------
@@ -2323,6 +2236,29 @@ function ageLabel(hours) {
  * The bound case. Description and timeline are client-written text shown as
  * data — rendered with esc(), collapsed by default so the phase stays compact.
  */
+/**
+ * Which client the case is about — District / School / Institution from
+ * Creatio's Case info. These steer the analysis and the fix to that district's
+ * folder, so they're shown where you can check them. A brief saved before they
+ * were captured says so; Refresh (or the next analysis) fills them in.
+ */
+function caseCodesHtml(brief) {
+  if (!("codes" in brief)) {
+    return `<p class="hint">District and school codes aren't stored for this case yet — press Refresh to pull them.</p>`;
+  }
+  const c = brief.codes || {};
+  const chips = [
+    ["District", c.districtCode],
+    ["School", c.schoolCode],
+    ["Institution", c.institutionId],
+  ]
+    .filter(([, v]) => v)
+    .map(([k, v]) => `<span class="pill ws-code">${k} <strong>${esc(v)}</strong></span>`);
+  return chips.length
+    ? `<div class="chips ws-codes">${chips.join("")}</div>`
+    : `<p class="caveat">Creatio has no district or school code on this case — the fix may ask which folder it belongs in.</p>`;
+}
+
 function renderCaseBrief() {
   const box = $("#wsCaseBrief");
   const { number, brief, ageHours } = state.ws.case;
@@ -2365,6 +2301,7 @@ function renderCaseBrief() {
       }
       <p class="ws-bound-subject">${esc(brief.subject)}</p>
       <p class="muted">${esc(brief.account)}${brief.contact ? " · " + esc(brief.contact) : ""} · opened ${esc(fmtDate(brief.createdOn))}</p>
+      ${caseCodesHtml(brief)}
       ${(brief.caveats || []).map((c) => `<p class="caveat">${esc(c)}</p>`).join("")}
       ${renderAttachments(brief.attachments)}
       <details class="ws-brief-detail">
@@ -2401,15 +2338,43 @@ function renderCaseBrief() {
 }
 
 // ---------------------------------------------------------------------------
-// Workspace · phase 3: hand off to Claude Code
+// Workspace · phase 3: readiness checklist
 //
-// This phase deliberately runs NOTHING. The app has no ability to edit files
-// and never gets one: case text is written by clients, and pairing it with
-// write access is the combination the analysis runner is built to avoid. So
-// phase 3 checks that the pieces are in place and hands over the prompt. The
-// creatio-case-fix skill does the work in your own session, behind its
-// approval gate, and leaves the edits uncommitted.
+// Phase 3 plans a fix from the case, the stored analysis and the team's skills
+// (the Custom-Team repo's /Skills), then runs it one step at a time. The
+// planning pass is read-only; each step's edits are written by the server only
+// when you press that step's Apply, re-verified first, and left uncommitted.
 // ---------------------------------------------------------------------------
+
+/** Which team skills a plan will be given — loaded once, from the server's 24h cache. */
+async function loadSkillsInfo() {
+  if (state.ws.skillsInfo !== undefined) return;
+  state.ws.skillsInfo = null; // in flight
+  try {
+    state.ws.skillsInfo = await api("/api/skills");
+  } catch (e) {
+    state.ws.skillsInfo = { ok: false, skills: [], message: e.message };
+  }
+  renderHandoff();
+}
+
+function skillsRow() {
+  const info = state.ws.skillsInfo;
+  if (!info) return { ok: true, cls: "info", html: `Team skills <span class="muted">(checking the Custom-Team repo…)</span>` };
+  if (!info.ok) {
+    return {
+      ok: true,
+      cls: "warn",
+      html: `Team skills unavailable <span class="muted">— ${esc(info.message || "unknown error")} The fix can still be planned without them.</span>`,
+    };
+  }
+  const n = info.skills.length;
+  return {
+    ok: true,
+    cls: "ok",
+    html: `${n} team skill${n === 1 ? "" : "s"} from the Custom-Team repo <span class="muted">(the plan picks the ones that fit the case)</span>`,
+  };
+}
 /**
  * One line describing the stored plan, with a link to open it.
  *
@@ -2421,6 +2386,13 @@ function lastPlanLine() {
   if (!p) return "";
   const n = p.edits.length;
   const usable = p.edits.filter((e) => e.ok).length;
+  if (isStepped(p)) {
+    const settled = p.steps.filter((s) => (p.stepStatus || {})[s.n]).length;
+    return `<p class="hint ws-last-plan">
+      Last plan: ${p.steps.length} steps, ${settled} done${p.finishedAt ? " · report written" : ""}
+      · <button id="wsShowLast" class="link">show it</button>
+    </p>`;
+  }
   const state_ = p.appliedAt
     ? usable === n && n > 0
       ? `applied ${esc(fmtDate(p.appliedAt))}, since reverted`
@@ -2439,8 +2411,9 @@ function renderHandoff() {
   const paths = state.ws.paths || [];
   // A case analysis only counts for the case it was made for.
   const ca = state.ws.caseAnalysis && state.ws.caseAnalysis.caseNumber === number ? state.ws.caseAnalysis : null;
-  const hasAnalysis = !!ca || !!state.ws.analysisReady;
-  const analysisStale = ca ? !!ca.stale : !!state.ws.analysisStale;
+  // Only the analysis made for this case counts: it read the files related to it.
+  const hasAnalysis = !!ca;
+  const analysisStale = ca && !!ca.stale;
 
   const items = [];
   if (number) {
@@ -2473,27 +2446,36 @@ function renderHandoff() {
         : `${label} <span class="muted">(current)</span>`,
     });
   } else {
-    items.push({ ok: false, html: `No stored analysis — click <strong>Analyze</strong> in phase 2.` });
+    items.push({
+      ok: false,
+      html: number
+        ? `No case analysis — click <strong>Analyze for ${esc(number)}</strong> in phase 2.`
+        : `No case analysis — pick a case, then click <strong>Analyze</strong> in phase 2.`,
+    });
   }
 
   const ready = !!number && paths.length > 0 && hasAnalysis;
+  // Informational only: skills shape the plan but never block it.
+  items.push(skillsRow());
+  loadSkillsInfo();
 
   box.innerHTML = `
     <h2><span class="ws-step">3</span> Fix</h2>
     <p class="hint">
-      Reads the case and the stored analysis, works out which lines are responsible,
-      and shows you every edit as <strong>before/after</strong>. Nothing touches your
-      files until you press Apply — and applied edits are left
-      <strong>uncommitted</strong> so you review the diff yourself.
+      Reads the case, the stored analysis and the <strong>team skills</strong>, picks the
+      skills that fit, and writes a numbered plan showing every edit as
+      <strong>before/after</strong>. You then run it one step at a time: nothing touches
+      your files until you press a step's Apply, each step is verified before the next
+      unlocks, and applied edits are left <strong>uncommitted</strong> so you review the diff yourself.
     </p>
     <ul class="ws-ready">
-      ${items.map((it) => `<li class="${it.ok ? "ok" : "miss"}">${it.html}</li>`).join("")}
+      ${items.map((it) => `<li class="${it.cls || (it.ok ? "ok" : "miss")}">${it.html}</li>`).join("")}
     </ul>
     ${
       ready
         ? `<div class="row wrap ws-fix-row">
              <button id="wsPlanBtn" class="primary">Plan the fix</button>
-             <span class="muted">reads the case and your code, then shows the edits for approval</span>
+             <span class="muted">reads the case, the team skills and your code, then shows the plan for approval</span>
            </div>
            ${lastPlanLine()}`
         : `<p class="hint">Finish the steps above and the fix button appears here.</p>`
@@ -2501,7 +2483,7 @@ function renderHandoff() {
 
   if (!ready) return;
 
-  $("#wsPlanBtn", box).addEventListener("click", runFixPlan);
+  $("#wsPlanBtn", box).addEventListener("click", () => runFixPlan());
   $("#wsShowLast", box)?.addEventListener("click", showLastPlan);
 }
 
@@ -2513,25 +2495,34 @@ function renderHandoff() {
 // list of edits. Nothing touches disk until you press Apply, and the server
 // re-verifies every match before writing. Edits are left uncommitted.
 // ---------------------------------------------------------------------------
-async function runFixPlan() {
+/**
+ * Plan a fix, or with `revise` ({id, feedback}) revise an existing plan. A
+ * revision keeps the current plan on screen until the new one arrives, so a
+ * failed or stopped revise leaves you where you were.
+ */
+async function runFixPlan(revise = null) {
   if (state.ws.planning) return;
   state.ws.planning = true;
 
   const panel = $("#wsFixPanel");
   const planBox = $("#wsFixPlan");
-  planBox.classList.add("hidden");
-  planBox.innerHTML = "";
+  const prior = revise ? state.ws.plan : null;
+  if (!revise) {
+    planBox.classList.add("hidden");
+    planBox.innerHTML = "";
+  }
 
   panel.classList.remove("hidden");
   panel.innerHTML = `
     <div class="ai-head">
-      <span class="ai-run-title">🛠 Planning a fix <span class="muted">· ${esc(state.ws.case.number)}</span></span>
+      <span class="ai-run-title">🛠 ${revise ? "Revising the plan" : "Planning a fix"} <span class="muted">· ${esc(state.ws.case.number)}</span></span>
       <span class="ai-tools">
         <button id="wsFixStop" class="ai-tool stop-btn" title="Stop">■ Stop</button>
         <span class="ai-status"><span class="spinner"></span> reading the case…</span>
       </span>
     </div>
     <p class="hint">Read-only: this pass can read your files but cannot change them.</p>
+    ${revise ? `<p class="ws-plan-note"><strong>Your feedback:</strong> ${esc(revise.feedback)}</p>` : ""}
     <ul class="ws-activity" id="wsFixActivity"></ul>
     <div class="ai-output md streaming" id="wsFixOutput"></div>
     <div class="ai-foot hidden" id="wsFixFoot"></div>`;
@@ -2551,11 +2542,12 @@ async function runFixPlan() {
   });
 
   let raw = "";
+  let gotPlan = false;
   try {
-    const res = await fetch("/api/workspace/fix/plan", {
+    const res = await fetch(revise ? "/api/workspace/fix/revise" : "/api/workspace/fix/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify(revise || {}),
       signal: controller.signal,
     });
     if (!res.ok) {
@@ -2585,6 +2577,21 @@ async function runFixPlan() {
             .join(", ")}`;
           activity.appendChild(w);
         }
+        const sk = document.createElement("li");
+        sk.className = "ws-source";
+        const full = (d.skills || []).filter((s) => s.full);
+        sk.textContent = (d.skills || []).length
+          ? `with ${d.skills.length} team skills${full.length ? `, full text of ${full.map((s) => s.name).join(", ")}` : ""}`
+          : `without team skills${d.skillsWarning ? ` — ${d.skillsWarning}` : ""}`;
+        activity.appendChild(sk);
+        if (d.revising) {
+          const rv = document.createElement("li");
+          rv.className = "ws-source";
+          rv.textContent = `writing revision ${d.revising.revision}${
+            d.revising.locked ? `, keeping the ${d.revising.locked} step${d.revising.locked === 1 ? "" : "s"} already carried out` : ""
+          }`;
+          activity.appendChild(rv);
+        }
       },
       tool: (d) => {
         const li = document.createElement("li");
@@ -2608,13 +2615,28 @@ async function runFixPlan() {
           foot.textContent = bits.join(" · ");
           foot.classList.remove("hidden");
         }
+        if (!d.plan && prior) {
+          // A revise that produced no usable plan leaves the current one standing.
+          const p = document.createElement("p");
+          p.className = "ai-error";
+          p.textContent = `${d.planError || "No revised plan was produced."} Your current plan is unchanged.`;
+          panel.appendChild(p);
+          renderFixPlan(prior);
+          return;
+        }
+        gotPlan = !!d.plan;
+        // The locked steps carry over, so do their verification results.
+        if (prior && d.plan) stepVerifyFor(d.plan) && Object.assign(stepVerifyFor(d.plan), stepVerifyFor(prior));
         state.ws.plan = d.plan;
+        state.ws.lastPlan = d.plan || state.ws.lastPlan;
         renderFixPlan(d.plan, d.planError);
       },
       error: (d) => {
         // A timeout or Stop that still produced a plan isn't a dead end.
         if (d.plan) {
+          gotPlan = true;
           state.ws.plan = d.plan;
+          state.ws.lastPlan = d.plan;
           renderFixPlan(d.plan, null, d.message);
         }
         throw new Error(d.message || "Planning failed");
@@ -2622,10 +2644,11 @@ async function runFixPlan() {
     });
   } catch (e) {
     output.classList.remove("streaming");
+    if (prior && !gotPlan) renderFixPlan(prior); // re-enable the revise box on the unchanged plan
     if (stopped || e.name === "AbortError") {
       statusEl.textContent = "■ stopped";
       if (raw.trim()) finishTools(tools, raw, state.ws.case.number, "fix-plan");
-    } else if (state.ws.plan) {
+    } else if (gotPlan) {
       // The plan survived; the run just didn't finish cleanly.
       statusEl.innerHTML = `<span class="err-text">incomplete</span>`;
       finishTools(tools, raw, state.ws.case.number, "fix-plan");
@@ -2677,6 +2700,7 @@ function renderFixPlan(plan, planError, incomplete) {
     return;
   }
 
+  const stepped = isStepped(plan);
   const wasApplied = Boolean(plan.appliedAt);
   const applicable = plan.edits.filter((e) => e.ok);
   const blocked = plan.edits.filter((e) => !e.ok);
@@ -2686,8 +2710,8 @@ function renderFixPlan(plan, planError, incomplete) {
   // has landed its `oldStr` is gone, so "all still applicable" can only mean
   // the work was undone. Offer to apply it again rather than dead-ending on a
   // read-only record of changes that aren't there.
-  const reverted = wasApplied && plan.edits.length > 0 && blocked.length === 0;
-  const done = wasApplied && !reverted;
+  const reverted = !stepped && wasApplied && plan.edits.length > 0 && blocked.length === 0;
+  const done = !stepped && wasApplied && !reverted;
 
   const section = (title, text) =>
     text && text.trim() ? `<div class="ws-plan-note"><strong>${title}</strong> ${esc(text)}</div>` : "";
@@ -2735,28 +2759,38 @@ function renderFixPlan(plan, planError, incomplete) {
     return `<span class="ws-req-chip" title="${esc(text)}">asked for #${esc(e.requestId)}</span>`;
   };
 
-  const editHtml = (e, i) => `
-    <div class="ws-edit ${e.ok ? "" : "blocked"}">
+  // `landed`: the edit's step was applied, so its old text being gone is the
+  // expected result, not a problem to show.
+  const editHtml = (e, i, landed = false) => `
+    <div class="ws-edit ${e.ok || landed ? "" : "blocked"}">
       <div class="ws-edit-head">
         <span class="ws-edit-n">${i + 1}</span>
         <code>${esc(e.file)}</code>
-        ${e.line ? `<span class="muted">line ${e.line}</span>` : ""}
+        ${e.create ? `<span class="pill ws-new-pill">new file</span>` : e.line ? `<span class="muted">line ${e.line}</span>` : ""}
         ${reqChip(e)}
-        ${e.ok ? "" : `<span class="pill warn">can't apply</span>`}
+        ${landed ? `<span class="pill set">${e.create ? "created" : "applied"}</span>` : e.ok ? "" : `<span class="pill warn">can't apply</span>`}
       </div>
       ${e.why ? `<p class="ws-edit-why">${esc(e.why)}</p>` : ""}
-      ${e.problem ? `<p class="caveat">${esc(e.problem)}</p>` : ""}
-      <div class="ws-diff">
-        <pre class="ws-diff-old">${esc(e.oldStr)}</pre>
-        <pre class="ws-diff-new">${esc(e.newStr) || '<em class="muted">(deleted)</em>'}</pre>
-      </div>
+      ${e.problem && !landed ? `<p class="caveat">${esc(e.problem)}</p>` : ""}
+      ${
+        e.create
+          ? `<div class="ws-diff ws-diff-create">
+               <pre class="ws-diff-new">${esc(e.newStr)}</pre>
+             </div>`
+          : `<div class="ws-diff">
+               <pre class="ws-diff-old">${esc(e.oldStr)}</pre>
+               <pre class="ws-diff-new">${esc(e.newStr) || '<em class="muted">(deleted)</em>'}</pre>
+             </div>`
+      }
     </div>`;
 
   box.innerHTML = `
     <h2>${done ? "Applied fix" : reverted ? "Previously applied fix" : "Proposed fix"}</h2>
     <p class="muted">
       ${esc(plan.caseNumber)} · ${
-        done
+        stepped
+          ? `${plan.steps.length} steps · ${plan.steps.filter((s) => (plan.stepStatus || {})[s.n]).length} done · ${plan.edits.length} edit${plan.edits.length === 1 ? "" : "s"}`
+          : done
           ? `${plan.edits.length} edit${plan.edits.length === 1 ? "" : "s"} planned, already applied`
           : `${applicable.length} edit${applicable.length === 1 ? "" : "s"} ready${blocked.length ? ` · ${blocked.length} blocked` : ""}`
       } · confidence ${esc(plan.confidence)}
@@ -2785,6 +2819,7 @@ function renderFixPlan(plan, planError, incomplete) {
              cover everything the case asks for — read “Not fixed” before applying.</p>`
         : ""
     }
+    ${revisionLineHtml(plan)}
     ${(plan.warnings || []).map((w) => `<p class="caveat">⚠ ${esc(w)}</p>`).join("")}
     ${requestsHtml}
     ${section("Problem:", plan.problem)}
@@ -2793,9 +2828,16 @@ function renderFixPlan(plan, planError, incomplete) {
     ${section("Risks:", plan.risks)}
     ${section("Assumptions:", plan.assumptions)}
     ${wikiRefsHtml(plan)}
-    ${plan.edits.length ? plan.edits.map(editHtml).join("") : `<p class="caveat">The plan proposes no edits — read the reasoning above for what it would need.</p>`}
+    ${skillsHtml(plan)}
     ${
-      !done && applicable.length
+      stepped
+        ? stepsHtml(plan, editHtml)
+        : plan.edits.length
+          ? plan.edits.map((e, i) => editHtml(e, i)).join("")
+          : `<p class="caveat">The plan proposes no edits — read the reasoning above for what it would need.</p>`
+    }
+    ${
+      !stepped && !done && applicable.length
         ? `<div class="row wrap ws-apply-row">
              <button id="wsApplyBtn" class="primary">${reverted ? "Apply again" : "Apply"} ${applicable.length} edit${applicable.length === 1 ? "" : "s"}</button>
              <button id="wsDiscardBtn" class="secondary">Discard</button>
@@ -2807,9 +2849,12 @@ function renderFixPlan(plan, planError, incomplete) {
              originals are backed up first, so this is reversible either way.
            </p>`
         : ""
-    }`;
+    }
+    ${reviseHtml(plan, stepped ? plan.steps.some((s) => !(plan.stepStatus || {})[s.n]) : !done)}`;
   box.classList.remove("hidden");
 
+  wireRevise(plan, box);
+  if (stepped) return wireSteps(plan, box);
   if (done || !applicable.length) return;
   $("#wsApplyBtn", box).addEventListener("click", () => applyFixPlan(plan.id, reverted));
   $("#wsDiscardBtn", box).addEventListener("click", () => {
@@ -2818,6 +2863,357 @@ function renderFixPlan(plan, planError, incomplete) {
     box.innerHTML = "";
     $("#wsFixPanel").classList.add("hidden");
   });
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: a skills-driven plan, run one step at a time
+//
+// A plan made with the team skills is a numbered list of steps. Each step
+// applies one skill (or is manual), and only the next pending step can be
+// acted on: an edit step is applied and then verified against the files, a
+// manual step (work items, deploys, a decision) is marked done by you. A step
+// that fails verification stops the run — later steps stay locked.
+// ---------------------------------------------------------------------------
+
+/** A plan with real steps. One implicit step is the old "apply everything" plan. */
+function isStepped(plan) {
+  const steps = (plan && plan.steps) || [];
+  return steps.length > 0 && !(steps.length === 1 && steps[0].implicit);
+}
+
+/** "Revision 3 · based on your feedback", with the notes so far. */
+function revisionLineHtml(plan) {
+  const fb = plan.feedback || [];
+  if (!plan.revision || plan.revision < 2) return "";
+  return `<details class="ws-skill-more ws-revision">
+      <summary>Revision ${plan.revision} — shaped by ${fb.length} note${fb.length === 1 ? "" : "s"} of yours; latest: “${esc(
+        (fb[fb.length - 1] || {}).text || ""
+      )}”</summary>
+      <ol>${fb.map((f) => `<li>${esc(f.text)} <span class="muted">${esc(fmtDate(f.at))}</span></li>`).join("")}</ol>
+    </details>`;
+}
+
+/** The feedback box: tell the planner what to change, and it re-plans the rest. */
+function reviseHtml(plan, open) {
+  if (!open) return "";
+  const locked = (plan.steps || []).filter((s) => (plan.stepStatus || {})[s.n]).length;
+  return `<div class="ws-revise">
+      <h3>Revise the plan</h3>
+      <p class="hint">
+        Tell it what to change — answer a missing input, swap a skill, drop or reword a step,
+        change an edit. It re-plans read-only and shows you the new plan before anything is
+        written.${locked ? ` The ${locked} step${locked === 1 ? "" : "s"} already carried out stay as they are.` : ""}
+      </p>
+      <textarea id="wsReviseText" rows="3" maxlength="2000"
+        placeholder="e.g. The grade bands are 9-12 only. Use add-repeating-header instead of step 2. Drop the deploy step."></textarea>
+      <div class="row wrap ws-apply-row">
+        <button id="wsReviseBtn" class="primary">Revise plan</button>
+        <span id="wsReviseStatus" class="status"></span>
+      </div>
+    </div>`;
+}
+
+function wireRevise(plan, box) {
+  const text = $("#wsReviseText", box);
+  const btn = $("#wsReviseBtn", box);
+  if (!text || !btn) return;
+  box.querySelectorAll("button[data-answer]").forEach((a) =>
+    a.addEventListener("click", () => {
+      const q = (plan.missingInputs || [])[Number(a.dataset.answer)] || "";
+      text.value = `${text.value.trim() ? text.value.trim() + "\n" : ""}${q}: `;
+      text.focus();
+      text.setSelectionRange(text.value.length, text.value.length);
+    })
+  );
+  const submit = () => {
+    const feedback = text.value.trim();
+    const status = $("#wsReviseStatus", box);
+    if (!feedback) {
+      status.textContent = "Say what to change first.";
+      status.className = "status err";
+      text.focus();
+      return;
+    }
+    btn.disabled = true;
+    text.disabled = true;
+    status.innerHTML = '<span class="spinner"></span> Revising — see the run above…';
+    status.className = "status";
+    $("#wsFixPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+    runFixPlan({ id: plan.id, feedback });
+  };
+  btn.addEventListener("click", submit);
+  // Ctrl/Cmd+Enter sends, like most chat boxes.
+  text.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) submit();
+  });
+}
+
+function skillLink(x) {
+  return x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.name)}</a>` : esc(x.name);
+}
+
+/** Inventory, selection (in order), rejects, gaps and missing inputs. */
+function skillsHtml(plan) {
+  const sk = plan.skills || {};
+  const selected = sk.selected || [];
+  const inventory = sk.inventory || [];
+  const missing = plan.missingInputs || [];
+  if (!(sk.available || []).length && !selected.length) {
+    return plan.skills
+      ? `<div class="ws-plan-note"><strong>Team skills:</strong> none were available for this plan.</div>`
+      : "";
+  }
+  const rejected = sk.rejected || [];
+  const gaps = sk.gaps || [];
+  return `<div class="ws-requests ws-skills">
+      <h3>Team skills for this case</h3>
+      ${
+        selected.length
+          ? `<ol class="ws-skill-list">${selected
+              .map(
+                (x) => `<li><strong>${skillLink(x)}</strong> — ${esc(x.why)}${
+                  x.feeds ? ` <span class="muted">→ ${esc(x.feeds)}</span>` : ""
+                }</li>`
+              )
+              .join("")}</ol>`
+          : `<p class="caveat">No team skill fits this case — every step below is manual or plain edits.</p>`
+      }
+      ${
+        gaps.length
+          ? `<div class="ws-plan-note"><strong>Not covered by a skill:</strong></div>
+             <ul class="ws-skill-gaps">${gaps.map((g) => `<li>${esc(g)}</li>`).join("")}</ul>`
+          : ""
+      }
+      ${
+        rejected.length
+          ? `<details class="ws-skill-more"><summary>Considered and rejected (${rejected.length})</summary>
+               <ul>${rejected.map((r) => `<li><strong>${esc(r.name)}</strong> — ${esc(r.reason)}</li>`).join("")}</ul>
+             </details>`
+          : ""
+      }
+      ${
+        inventory.length
+          ? `<details class="ws-skill-more"><summary>Skills inventory (${inventory.length})</summary>
+               <div class="ws-table-scroll"><table class="ws-skill-table">
+                 <thead><tr><th>Skill</th><th>Purpose</th><th>Triggers</th><th>Inputs</th><th>Outputs</th></tr></thead>
+                 <tbody>${inventory
+                   .map(
+                     (i) => `<tr><td>${skillLink(i)}</td><td>${esc(i.purpose)}</td><td>${esc(i.triggers)}</td>
+                       <td>${esc(i.inputs)}</td><td>${esc(i.outputs)}</td></tr>`
+                   )
+                   .join("")}</tbody>
+               </table></div>
+             </details>`
+          : ""
+      }
+    </div>
+    ${
+      missing.length
+        ? `<div class="caveat ws-missing">
+             <strong>Missing inputs</strong> — a selected skill needs these, and the edits that depend
+             on them were left out. Answer them below and the plan is revised to use your answers:
+             <ul>${missing
+               .map((m, i) => `<li>${esc(m)} <button class="link" data-answer="${i}">answer</button></li>`)
+               .join("")}</ul>
+           </div>`
+        : ""
+    }`;
+}
+
+function stepVerifyFor(plan) {
+  state.ws.stepVerify = state.ws.stepVerify || {};
+  return (state.ws.stepVerify[plan.id] = state.ws.stepVerify[plan.id] || {});
+}
+
+function stepsHtml(plan, editHtml) {
+  const status = plan.stepStatus || {};
+  const verify = stepVerifyFor(plan);
+  const failed = plan.steps.find((s) => verify[s.n] && !verify[s.n].ok);
+  const next = plan.steps.find((s) => !status[s.n]);
+  const STATE = { applied: "applied", done: "done", skipped: "skipped" };
+
+  const cards = plan.steps.map((s) => {
+    const st = status[s.n];
+    const isNext = !failed && next && next.n === s.n;
+    const edits = plan.edits.map((e, i) => [e, i]).filter(([e]) => e.step === s.n);
+    const landed = st && st.state === "applied";
+    const blockedHere = !st && edits.some(([e]) => !e.ok);
+    const pill = st
+      ? `<span class="pill ${st.state === "skipped" ? "warn" : "set"}">${STATE[st.state] || esc(st.state)}</span>`
+      : isNext
+        ? `<span class="pill">next</span>`
+        : `<span class="muted">waiting</span>`;
+    const v = verify[s.n];
+    const detail = [
+      ["Inputs", s.inputs],
+      ["Output", s.output],
+      ["Verify", s.verify],
+    ]
+      .filter(([, t]) => t)
+      .map(([k, t]) => `<div class="ws-plan-note"><strong>${k}:</strong> ${esc(t)}</div>`)
+      .join("");
+
+    let controls = "";
+    if (isNext) {
+      controls =
+        s.kind === "edit"
+          ? `<div class="row wrap ws-apply-row">
+               <button class="primary" data-act="apply" data-n="${s.n}" ${blockedHere ? "disabled" : ""}>
+                 Apply step ${s.n} (${edits.length} edit${edits.length === 1 ? "" : "s"})</button>
+               <button class="secondary" data-act="skip" data-n="${s.n}">Skip</button>
+               <span class="status" data-status="${s.n}"></span>
+             </div>
+             ${
+               blockedHere
+                 ? `<p class="caveat">An edit in this step no longer matches your files, so it can't be applied. Skip it, or re-plan the fix.</p>`
+                 : ""
+             }`
+          : `<div class="row wrap ws-apply-row">
+               <input class="ws-step-note" data-note="${s.n}" placeholder="Note (optional) — e.g. story number, where it was deployed">
+               <button class="primary" data-act="done" data-n="${s.n}">Mark done</button>
+               <button class="secondary" data-act="skip" data-n="${s.n}">Skip</button>
+               <span class="status" data-status="${s.n}"></span>
+             </div>`;
+    }
+
+    const verifyHtml = v
+      ? v.ok
+        ? `<p class="status ok">✓ Verified — ${
+            v.checks.length ? `${v.checks.length} edit${v.checks.length === 1 ? "" : "s"} landed as planned` : "nothing on disk to check"
+          }. Nothing staged, nothing committed.</p>`
+        : `<div class="caveat"><strong>Step ${s.n} didn't verify — stopped here.</strong> Later steps stay locked.
+             <ul>${v.checks
+               .filter((c) => !c.ok)
+               .map((c) => `<li><code>${esc(c.file)}</code>: ${esc(c.problem)}</li>`)
+               .join("")}</ul>
+             Check the file (the original is in the backup), then re-plan the fix.</div>`
+      : "";
+
+    return `<div class="ws-step-card ${st ? "settled" : isNext ? "next" : "locked"}">
+        <div class="ws-step-head">
+          <span class="ws-step">${s.n}</span>
+          <span class="ws-step-skill">${s.skill ? skillLink({ name: s.skill, url: s.url }) : `<span class="muted">manual — no skill</span>`}</span>
+          <span class="muted">${s.kind === "edit" ? "edits files" : "you carry this out"}</span>
+          ${pill}
+        </div>
+        ${s.instructions ? `<p class="ws-step-instr">${esc(s.instructions)}</p>` : ""}
+        ${detail}
+        ${st && st.note ? `<div class="ws-plan-note"><strong>Note:</strong> ${esc(st.note)}</div>` : ""}
+        ${edits.map(([e, i]) => editHtml(e, i, landed)).join("")}
+        ${verifyHtml}
+        ${controls}
+      </div>`;
+  });
+
+  const allSettled = !next;
+  // Every step manual: there's nothing to Apply, and the likely reason is the
+  // missing inputs — say so rather than leave the user hunting for the button.
+  const noEdits = !plan.edits.length;
+  return `<h3 class="ws-steps-title">Plan — ${plan.steps.length} step${plan.steps.length === 1 ? "" : "s"}, run in order</h3>
+    ${
+      noEdits
+        ? `<p class="caveat">This plan proposes no file changes, so there's no Apply button — every step is one you carry out.${
+            (plan.missingInputs || []).length
+              ? " It left the edits out because of the missing inputs above: answer them in <strong>Revise the plan</strong> below and it will write them."
+              : " If you expected edits, say what to change in <strong>Revise the plan</strong> below."
+          }</p>`
+        : ""
+    }
+    ${cards.join("")}
+    <div class="row wrap ws-apply-row">
+      ${allSettled ? `<button id="wsFinishBtn" class="primary">Final report</button>` : ""}
+      ${Object.keys(plan.stepStatus || {}).length ? "" : `<button id="wsDiscardBtn" class="secondary">Discard</button>`}
+      <span id="wsFinishStatus" class="status"></span>
+    </div>
+    <p class="hint">
+      Each Apply writes only that step's edits, straight to your files, and leaves them
+      <strong>uncommitted and unstaged</strong>. The originals are backed up first, under
+      <code>.analysis/fixes/${esc(plan.id)}/backup/</code>.
+    </p>
+    <div id="wsFinalReport" class="md hidden"></div>`;
+}
+
+function wireSteps(plan, box) {
+  box.querySelectorAll("button[data-act]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const n = Number(btn.dataset.n);
+      const note = box.querySelector(`[data-note="${n}"]`)?.value || "";
+      runStepAction(plan, n, btn.dataset.act, note);
+    })
+  );
+  $("#wsFinishBtn", box)?.addEventListener("click", () => finishFixPlan(plan.id));
+  $("#wsDiscardBtn", box)?.addEventListener("click", () => {
+    state.ws.plan = null;
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    $("#wsFixPanel").classList.add("hidden");
+  });
+  if (plan.finishedAt) finishFixPlan(plan.id, true);
+}
+
+async function runStepAction(plan, n, act, note) {
+  const box = $("#wsFixPlan");
+  const status = box.querySelector(`[data-status="${n}"]`);
+  box.querySelectorAll("button[data-act]").forEach((b) => (b.disabled = true));
+  if (status) {
+    status.textContent = act === "apply" ? "Applying…" : "Saving…";
+    status.className = "status";
+  }
+  try {
+    if (act === "apply") {
+      const d = await api("/api/workspace/fix/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: plan.id, step: n }),
+      });
+      stepVerifyFor(plan)[n] = d.verify || { ok: true, checks: [] };
+    } else {
+      await api("/api/workspace/fix/step-done", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: plan.id, step: n, skipped: act === "skip", note }),
+      });
+    }
+    // Re-read the plan so every edit is re-checked against the files as they are now.
+    const d = await api("/api/workspace/fix");
+    const fresh = d.plan && d.plan.id === plan.id ? d.plan : plan;
+    state.ws.plan = fresh;
+    state.ws.lastPlan = fresh;
+    renderFixPlan(fresh);
+    renderHandoff();
+  } catch (e) {
+    box.querySelectorAll("button[data-act]").forEach((b) => (b.disabled = false));
+    if (status) {
+      status.textContent = e.message;
+      status.className = "status err";
+    }
+  }
+}
+
+async function finishFixPlan(id, quiet = false) {
+  const out = $("#wsFinalReport");
+  const status = $("#wsFinishStatus");
+  if (!out) return;
+  if (!quiet && status) {
+    status.textContent = "Writing the report…";
+    status.className = "status";
+  }
+  try {
+    const d = await api("/api/workspace/fix/finish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    out.innerHTML = renderMarkdown(d.markdown) + `<p class="hint">Saved to <code>${esc(d.path)}</code>.</p>`;
+    out.classList.remove("hidden");
+    if (status) status.textContent = "";
+    if (!quiet) out.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (e) {
+    if (status) {
+      status.textContent = e.message;
+      status.className = "status err";
+    }
+  }
 }
 
 async function applyFixPlan(id, reapply = false) {

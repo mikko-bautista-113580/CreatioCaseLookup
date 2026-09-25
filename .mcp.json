@@ -2,8 +2,8 @@
   "mcpServers": {
     "creatio-readonly": {
       "type": "stdio",
-      "command": "node",
-      "args": ["dist/index.js"],
+      "command": ".venv/Scripts/python",
+      "args": ["-m", "creatio_case_lookup.mcp_server"],
       "env": {}
     }
   }
