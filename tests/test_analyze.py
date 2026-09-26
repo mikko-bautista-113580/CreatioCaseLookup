@@ -82,7 +82,7 @@ def test_ask_question_goes_to_stdin(monkeypatch):
     assert s.stdin == "QUESTION: why?\n\n" + build_context([case(1)])["text"]
     assert "why?" not in s.instruction and "why?" not in s.system_prompt
     assert s.cwd == "isolated" and s.setting_sources == [] and s.tools is None
-    assert s.model == analyze.DEFAULT_MODEL == "claude-opus-5"
+    assert s.model == analyze.DEFAULT_MODEL == "claude-opus-5-5"
     assert s.system_prompt == SYSTEM_PROMPT
     assert done == [{"costUsd": 1.5, "resultText": "r", "truncatedCases": 0}]
 

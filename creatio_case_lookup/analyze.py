@@ -40,23 +40,24 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
-# Default model for analysis. Overridable per-run (CREATIO_APP_MODEL); set to
-# a cheaper tier (e.g. "claude-sonnet-5", "claude-haiku-4-5") for faster runs.
+# Last-resort model, used only when neither .claude/settings.json (Settings tab)
+# nor CREATIO_APP_MODEL names one. See default_model().
 # ---------------------------------------------------------------------------
-DEFAULT_MODEL = "claude-opus-5"
+DEFAULT_MODEL = "claude-opus-5-5"
 
 
 def default_model() -> str:
-    """The model for the app's runs: CREATIO_APP_MODEL (environment, then .env),
-    else the `model` in this project's .claude/settings.json, else DEFAULT_MODEL.
-    Passed as --model, which would otherwise override the settings file's."""
+    """The model for every AI run the app starts: the `model` in this project's
+    .claude/settings.json (edited from the Settings tab), else CREATIO_APP_MODEL
+    (environment, then .env) as a fallback, else DEFAULT_MODEL. Read live, so a
+    change from the Settings tab applies to the next run without a restart."""
     from .claude_run import app_settings
     from .env import read_env_file
 
     return (
-        os.environ.get("CREATIO_APP_MODEL")
+        app_settings().get("model")
+        or os.environ.get("CREATIO_APP_MODEL")
         or (read_env_file().get("CREATIO_APP_MODEL") or "").strip()
-        or app_settings().get("model")
         or DEFAULT_MODEL
     )
 

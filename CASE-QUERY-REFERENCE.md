@@ -9,7 +9,7 @@ Built from real queries — includes the gotchas that aren't obvious.
 ## 1. Auth (how requests are made)
 
 - **Mode:** cookie auth (SSO tenant — no local password).
-- **Credentials live in** `c:\neldevsrc\creatio-mcp\.env`:
+- **Credentials live in** the repo's `.env` (repo root):
   `CREATIO_ASPXAUTH`, `CREATIO_BPMCSRF`, `CREATIO_BPMLOADER`, `CREATIO_BASE_URL`.
 - ⚠️ **Cookies expire in hours** and cannot auto-refresh. When reads start
   returning `401/403`, re-grab from browser DevTools → Application → Cookies
@@ -66,7 +66,7 @@ apply. Write it to the scratchpad and run it from the repo root:
 ```python
 # creatio_query.py — generic read-only OData GET via the project client
 import asyncio, json, sys
-sys.path.insert(0, r"C:\neldevsrc\Github\CreatioCaseLookup")
+sys.path.insert(0, ".")  # run from the repo root
 from creatio_case_lookup.creatio_client import build_query, odata_get
 
 async def get(entity, **opts):

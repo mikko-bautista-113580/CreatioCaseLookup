@@ -12,6 +12,7 @@ dependencies = [
   "uvicorn>=0.30",
   "httpx>=0.27",
   "mcp>=1.2",
+  "openpyxl>=3.1",  # Lifecycle tab's Excel output
 ]
 
 [project.optional-dependencies]
@@ -28,6 +29,9 @@ creatio-test-auth = "creatio_case_lookup.test_auth:main"
 
 [tool.setuptools]
 packages = ["creatio_case_lookup"]
+
+[tool.setuptools.package-data]
+creatio_case_lookup = ["templates/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

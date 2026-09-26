@@ -91,6 +91,9 @@ class RunSpec:
     timeout_ms: int = 120_000
     #: Abort mechanism (TS ``AbortSignal``): set the event to cancel the run.
     cancel: asyncio.Event | None = None
+    #: Extra environment variables for the child, on top of the app's own.
+    #: App-authored only (see lifecycle_export's publish run).
+    env: dict[str, str] | None = None
 
 
 class ClaudeCliError(Exception):
@@ -276,6 +279,38 @@ def app_settings() -> dict:
     return {k: raw[k] for k in APP_SETTINGS_KEYS if isinstance(raw.get(k), str) and raw[k].strip()}
 
 
+MODEL_CHOICES = ["claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5-20251001", "claude-fable-5-1"]
+EFFORT_CHOICES = ["low", "medium", "high"]
+OUTPUT_STYLE_CHOICES = ["Concise", "default", "Explanatory", "Learning"]
+_MODEL_RE = re.compile(r"^claude-[a-z0-9][a-z0-9.-]{1,60}$")
+_STYLE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9 _-]{0,39}$")
+
+
+def write_app_settings(updates: dict[str, str]) -> dict:
+    """Set model / effortLevel / outputStyle in `.claude/settings.json`, keeping
+    every other key in the file. Raises ValueError on a value that isn't one of
+    those settings' shapes. Returns the whitelisted keys after the write."""
+    checks = {
+        "model": lambda v: bool(_MODEL_RE.match(v)),
+        "effortLevel": lambda v: v in EFFORT_CHOICES,
+        "outputStyle": lambda v: bool(_STYLE_RE.match(v)),
+    }
+    for k, v in updates.items():
+        if k not in checks or not isinstance(v, str) or not checks[k](v.strip()):
+            raise ValueError(f"Invalid value for {k}.")
+    try:
+        with open(APP_SETTINGS_PATH, encoding="utf-8") as f:
+            raw = json.load(f)
+        if not isinstance(raw, dict):
+            raw = {}
+    except (OSError, ValueError):
+        raw = {}
+    raw.update({k: v.strip() for k, v in updates.items()})
+    APP_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    APP_SETTINGS_PATH.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+    return app_settings()
+
+
 def app_settings_file() -> str | None:
     """A filtered copy of the app's settings for --settings, or None when there
     are none. Written under `.analysis/` (git-ignored) and only when it changes."""
@@ -421,6 +456,8 @@ async def _run(
         cwd=cwd,
         creationflags=_CREATIONFLAGS,
     )
+    if spec.env:
+        pipes["env"] = {**os.environ, **spec.env}
     try:
         if launcher.via_shell:
             proc = await asyncio.create_subprocess_shell(

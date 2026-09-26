@@ -34,6 +34,7 @@ import json
 import math
 import os
 import re
+import secrets
 import sys
 import webbrowser
 from pathlib import Path
@@ -79,6 +80,18 @@ from .creatio_client import (
     test_connection,
 )
 from .env import read_env_file, write_env_file
+from .analyze import default_model
+from .claude_run import (
+    EFFORT_CHOICES,
+    MODEL_CHOICES,
+    OUTPUT_STYLE_CHOICES,
+    ClaudeCliError,
+    app_settings,
+    write_app_settings,
+)
+from .lifecycle import LifecycleError, groups_for_owner, lifecycle_allowed, lifecycle_sample, validate_request
+from .lifecycle_export import build_report_html, build_xlsx, publish_report
+from .preflight import run_checks
 from .fix_plan import (
     FixPlanError,
     apply_plan,
@@ -114,8 +127,6 @@ from .workspace import (
 PUBLIC_DIR: Path = _paths.PUBLIC_DIR
 HOST = "127.0.0.1"
 PORT: int = js_parse_int(os.environ.get("CREATIO_APP_PORT") or "3000") or 3000
-# Read once at startup, like the TS server's process.env lookup.
-APP_MODEL: str | None = os.environ.get("CREATIO_APP_MODEL") or None
 
 MIME: dict[str, str] = {
     ".html": "text/html; charset=utf-8",
@@ -359,6 +370,42 @@ async def api_meta(request: Request) -> Response:
     )
 
 
+# Settings: the Claude settings the app's runs use (.claude/settings.json).
+@route("GET", "/api/claude-settings")
+async def api_claude_settings_get(request: Request) -> Response:
+    return send_json(200, _claude_settings_body())
+
+
+@route("POST", "/api/claude-settings")
+async def api_claude_settings_post(request: Request) -> Response:
+    body = await read_body(request)
+    updates = {k: body[k] for k in ("model", "effortLevel", "outputStyle") if isinstance(body.get(k), str) and body[k].strip()}
+    try:
+        write_app_settings(updates)
+    except ValueError as e:
+        return send_json(400, {"error": "server", "message": str(e)})
+    return send_json(200, {"saved": True, **_claude_settings_body()})
+
+
+def _claude_settings_body() -> dict[str, Any]:
+    s = app_settings()
+    env_model = (os.environ.get("CREATIO_APP_MODEL") or read_env_file().get("CREATIO_APP_MODEL") or "").strip()
+    return {
+        "model": s.get("model", ""),
+        "effortLevel": s.get("effortLevel", ""),
+        "outputStyle": s.get("outputStyle", ""),
+        "envModel": env_model,
+        "effectiveModel": default_model(),
+        "choices": {"model": MODEL_CHOICES, "effortLevel": EFFORT_CHOICES, "outputStyle": OUTPUT_STYLE_CHOICES},
+    }
+
+
+# Setup tab: the same checklist start-app.bat prints, re-run live.
+@route("GET", "/api/preflight")
+async def api_preflight(request: Request) -> Response:
+    return send_json(200, await run_checks())
+
+
 @route("GET", "/api/test-auth")
 async def api_test_auth(request: Request) -> Response:
     return send_json(200, await test_connection())
@@ -454,6 +501,116 @@ async def api_config_post(request: Request) -> Response:
     test = await test_connection()
     return send_json(200, {"saved": True, "restartNeeded": restart_needed, "connection": test})
 
+
+# ---------------------------------------------------------------------------
+# Lifecycle: status/owner history of a team's closed cases (CaseLifecycle).
+# ---------------------------------------------------------------------------
+@route("GET", "/api/lifecycle/groups")
+async def api_lifecycle_groups(request: Request) -> Response:
+    try:
+        groups = await groups_for_owner(request.query_params.get("owner") or "")
+    except LifecycleError as e:
+        return send_json(400, {"error": "server", "message": str(e)})
+    return send_json(200, {"groups": groups, "allowed": lifecycle_allowed()})
+
+
+# Finished pulls, so Excel / artifact outputs can be made after the fact.
+# In memory only: a restart forgets them, and the UI just pulls again.
+_LC_RUNS: dict[str, dict[str, Any]] = {}
+_LC_KEEP = 5
+
+
+def _lc_group_name(v: Any) -> str:
+    return re.sub(r"[\x00-\x1f]", "", v)[:80].strip() if isinstance(v, str) else ""
+
+
+# Pull a team's closed cases + lifecycle rows, streaming progress (SSE):
+# progress {phase, done, total} ... then result {runId, cases, summary} | error.
+@route("POST", "/api/lifecycle")
+async def api_lifecycle(request: Request) -> Response:
+    body = await read_body(request)
+    try:
+        group_id, since, max_cases = validate_request(body.get("groupId"), body.get("since"), body.get("maxCases") or 100)
+    except LifecycleError as e:
+        return send_json(400, {"error": "server", "message": str(e)})
+    group = _lc_group_name(body.get("groupName"))
+
+    async def gen() -> AsyncIterator[str]:
+        q: asyncio.Queue = asyncio.Queue()
+
+        async def work() -> None:
+            try:
+                result = await lifecycle_sample(group_id, since, max_cases, lambda p: q.put_nowait(sse("progress", p)))
+                run_id = secrets.token_hex(6)
+                _LC_RUNS[run_id] = {"result": result, "group": group, "since": since}
+                for old in list(_LC_RUNS)[:-_LC_KEEP]:
+                    _LC_RUNS.pop(old, None)
+                q.put_nowait(sse("result", {"runId": run_id, **result}))
+            except AuthError as e:
+                q.put_nowait(sse("error", {"kind": "auth", "message": str(e)}))
+            except Exception as e:  # noqa: BLE001
+                q.put_nowait(sse("error", {"message": str(e)}))
+            q.put_nowait(_END)
+
+        task = asyncio.ensure_future(work())
+        try:
+            async for frame in _drain(q, heartbeat=True):
+                yield frame
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return _stream(gen())
+
+
+def _lc_run(request_run: Any) -> dict[str, Any] | None:
+    return _LC_RUNS.get(request_run) if isinstance(request_run, str) else None
+
+
+@route("GET", "/api/lifecycle/export")
+async def api_lifecycle_export(request: Request) -> Response:
+    run = _lc_run(request.query_params.get("run"))
+    if not run:
+        return send_json(404, {"error": "server", "message": "That pull is no longer available. Pull lifecycle again."})
+    data = build_xlsx(run["result"], run["group"], run["since"])
+    name = re.sub(r"[^A-Za-z0-9 _-]", "", run["group"] or "Case") + " lifecycle.xlsx"
+    return Response(
+        content=data,
+        status_code=200,
+        headers={
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "Content-Disposition": f'attachment; filename="{name}"',
+        },
+    )
+
+
+# The report page itself, served locally — works without the Claude CLI and is
+# the fallback when publishing fails.
+@route("GET", "/api/lifecycle/report")
+async def api_lifecycle_report(request: Request) -> Response:
+    run = _lc_run(request.query_params.get("run"))
+    if not run:
+        return send_json(404, {"error": "server", "message": "That pull is no longer available. Pull lifecycle again."})
+    html = build_report_html(run["result"], run["group"], run["since"])
+    return Response(content=html.encode("utf-8"), status_code=200, headers={"Content-Type": "text/html; charset=utf-8"})
+
+
+@route("POST", "/api/lifecycle/publish")
+async def api_lifecycle_publish(request: Request) -> Response:
+    body = await read_body(request)
+    run_id = body.get("runId")
+    run = _lc_run(run_id)
+    if not run:
+        return send_json(404, {"error": "server", "message": "That pull is no longer available. Pull lifecycle again."})
+    if not claude_available():
+        return send_json(400, {"error": "server", "message": CLAUDE_MISSING})
+    html = build_report_html(run["result"], run["group"], run["since"])
+    try:
+        url = await publish_report(html, run_id)
+    except ClaudeCliError as e:
+        return send_json(500, {"error": "server", "message": e.message})
+    run["artifactUrl"] = url
+    return send_json(200, {"url": url})
 
 
 
@@ -1025,7 +1182,7 @@ async def handle_analyze(request: Request) -> Response:
         try:
             try:
                 handle = analyze_cases(
-                    {"preset": preset, "question": question, "cases": cases, "cancel": cancel, "model": APP_MODEL},
+                    {"preset": preset, "question": question, "cases": cases, "cancel": cancel},
                     lambda text: q.put_nowait(sse("chunk", {"text": text})),
                     on_done,
                     on_error,

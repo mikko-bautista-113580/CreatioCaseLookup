@@ -224,6 +224,8 @@ def test_stop_without_text_persists_nothing(env):
 
 
 def test_model_resolution(monkeypatch):
+    # No model in .claude/settings.json: CREATIO_APP_MODEL is the fallback.
+    monkeypatch.setattr("creatio_case_lookup.claude_run.app_settings", lambda: {})
     monkeypatch.setattr("creatio_case_lookup.env.read_env_file", lambda: {"CREATIO_APP_MODEL": "from-file"})
     monkeypatch.setenv("CREATIO_APP_MODEL", "from-env")
     assert aw._resolve_model({"model": "opt"}) == "opt"
@@ -232,3 +234,7 @@ def test_model_resolution(monkeypatch):
     assert aw._resolve_model({}) == "from-file"
     monkeypatch.setattr("creatio_case_lookup.env.read_env_file", lambda: {})
     assert aw._resolve_model({}) == aw.DEFAULT_MODEL
+    # A model in .claude/settings.json beats both.
+    monkeypatch.setenv("CREATIO_APP_MODEL", "from-env")
+    monkeypatch.setattr("creatio_case_lookup.claude_run.app_settings", lambda: {"model": "from-settings"})
+    assert aw._resolve_model({}) == "from-settings"

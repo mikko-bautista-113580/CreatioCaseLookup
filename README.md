@@ -76,7 +76,7 @@ copy .env.example .env    # then edit .env (see Configuration)
 .venv\Scripts\python -m creatio_case_lookup.server     # starts the server, opens http://127.0.0.1:3000
 ```
 
-On Windows you can just double-click **`start-app.bat`** — it creates the `.venv` and installs everything on first run.
+On Windows you can just double-click **`start-app.bat`**. It finds Python 3.12+, creates the `.venv`, installs packages (and reinstalls them whenever `pyproject.toml` changes), creates `.env` from `.env.example` if there isn't one, and prints a setup check before starting. The same checklist is the app's first tab, **Setup**, with a fix for each item. Run the check on its own with `.venv\Scripts\python -m creatio_case_lookup.preflight`.
 
 **The MCP server is already registered** — this repo ships a project-scoped [`.mcp.json`](.mcp.json), so Claude Code picks it up automatically when opened on this folder (after the `.venv` exists). Approve the server when prompted.
 
@@ -101,7 +101,7 @@ All settings live in `.env` — the MCP server loads it from the project root it
 | `CREATIO_MAX_TOP` | Max rows per query (default 50) |
 | `CREATIO_APP_PORT` | Web app port (default 3000) |
 | `CREATIO_APP_NO_OPEN` | Set `1` to stop the app auto-opening the browser |
-| `CREATIO_APP_MODEL` | Model for AI analysis; default `claude-opus-5`. Set `claude-sonnet-5` or `claude-haiku-4-5` for cheaper/faster runs |
+| `CREATIO_APP_MODEL` | Fallback model, used only when `.claude/settings.json` sets none. The model, effort and output style for every AI run are set in **Settings → Claude settings** (default `claude-opus-5-5`, medium effort, Concise) |
 | `CREATIO_WORKSPACE_PATH` / `_2` / `_3` | The 1-3 folders the Workspace tab analyzes together (normally set from the UI) |
 | `CREATIO_WORKSPACE_FILE_CAP` | Total top-level file count (all folders) above which the app asks before analyzing (default 10) |
 | `CREATIO_WORKSPACE_TIMEOUT_MS` | Hard timeout for one workspace analysis (default 300000) |
@@ -133,7 +133,7 @@ The server binds to `127.0.0.1` only. Inside this repo it writes your local `.en
 With the **Claude CLI** installed and logged in, the results view shows an **"Analyze with AI"** bar — Summarize & prioritize, Common themes, Next actions, or a free-text question, streamed live and rendered as Markdown (copy / download as `.md`). Tick row checkboxes to analyze a subset; each row also has a "✨ analyze this one" button.
 
 - Enable: `npm i -g @anthropic-ai/claude-code`, then run `claude` once to sign in. Uses **your Claude subscription — no API key**.
-- Runs `claude -p` locally, **isolated** (no tools, no MCP, empty temp cwd); only the selected cases' **text** is sent — never your cookies. Defaults to **Claude Opus 5** (`claude-opus-5`); set `CREATIO_APP_MODEL=claude-sonnet-5` (or `claude-haiku-4-5`) for cheaper/faster runs.
+- Runs `claude -p` locally, **isolated** (no tools, no MCP, empty temp cwd); only the selected cases' **text** is sent — never your cookies. Uses the model, effort and output style from **Settings → Claude settings** (saved to `.claude/settings.json`; default **Claude Opus 5.5**, `claude-opus-5-5`, medium effort, Concise). Pick Sonnet 5 or Haiku 4.5 there for cheaper/faster runs.
 
 ### Workspace analysis
 

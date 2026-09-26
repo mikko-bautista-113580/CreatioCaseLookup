@@ -1,0 +1,194 @@
+<title>__TITLE__</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root{
+  --bg:#f4f6f9;--card:#ffffff;--ink:#17202e;--muted:#5d6a7d;--line:#dde3ec;--accent:#2459c9;--accent-soft:#e8eefb;
+  --s-new:#3b6fe0;--s-prog:#c98a12;--s-wait:#d2562b;--s-res:#1f8a5b;--s-closed:#7c8797;--s-reopen:#8e4ec6;
+  --warn-bg:#fff6e6;--warn-ink:#8a5a00;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  color-scheme:dark;--bg:#10151d;--card:#171e29;--ink:#e6ebf3;--muted:#98a3b5;--line:#283242;--accent:#7aa2ff;--accent-soft:#1c2740;
+  --s-new:#6d95f0;--s-prog:#e0a93a;--s-wait:#ee7b53;--s-res:#4cbf8a;--s-closed:#8d97a6;--s-reopen:#b184e6;--warn-bg:#2b2412;--warn-ink:#e7c27a;}}
+:root[data-theme="dark"]{
+  color-scheme:dark;--bg:#10151d;--card:#171e29;--ink:#e6ebf3;--muted:#98a3b5;--line:#283242;--accent:#7aa2ff;--accent-soft:#1c2740;
+  --s-new:#6d95f0;--s-prog:#e0a93a;--s-wait:#ee7b53;--s-res:#4cbf8a;--s-closed:#8d97a6;--s-reopen:#b184e6;--warn-bg:#2b2412;--warn-ink:#e7c27a;}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 "IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;padding-inline:16px;padding-block:28px 48px}
+.wrap{max-width:1080px;margin:0 auto;display:grid;gap:28px}
+h1,h2,h3{text-wrap:balance;margin:0;line-height:1.2}
+h1{font-size:1.9rem;font-weight:700;letter-spacing:-.01em}
+h2{font-size:1.2rem;font-weight:600}
+p{margin:0}
+.mono,.num{font-family:"IBM Plex Mono",ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums}
+.muted{color:var(--muted)}
+.eyebrow{font-size:.74rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+header{display:grid;gap:8px}
+.scope{color:var(--muted);max-width:72ch}
+.answers{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.answer{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;display:grid;gap:6px;align-content:start}
+.answer .big{font-size:1.6rem;font-weight:700;font-family:"IBM Plex Mono",monospace}
+.answer p{color:var(--muted);font-size:.92rem}
+.verdict{background:var(--accent-soft);border-radius:10px;padding:14px 18px;display:grid;gap:4px}
+.verdict strong{color:var(--accent)}
+.notes{display:grid;grid-template-columns:repeat(2,1fr);gap:10px 28px;margin:0;padding:0;list-style:none}
+.notes li{display:grid;gap:2px;padding-block:10px;border-top:1px solid var(--line)}
+.notes b{font-weight:600}
+.notes span{color:var(--muted);font-size:.92rem}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.84rem;color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+.toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
+.seg{display:inline-flex;flex-wrap:wrap;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--card)}
+.seg button{font:inherit;font-size:.88rem;border:0;background:none;color:var(--ink);padding:7px 13px;cursor:pointer;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--accent);color:#fff}
+.seg button:focus-visible,.case:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.table{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.88rem}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;white-space:nowrap}
+tr.case{cursor:pointer}
+tr.case:hover td{background:var(--accent-soft)}
+tr.case td:first-child{white-space:nowrap}
+.subj{color:var(--muted);font-size:.8rem;max-width:30ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:1px 8px;border-radius:999px;white-space:nowrap;border:1px solid var(--line);color:var(--muted)}
+.tag.bounced{color:var(--s-wait);border-color:currentColor}
+.tag.reassigned{color:var(--s-reopen);border-color:currentColor}
+.tag.full{color:var(--s-res);border-color:currentColor}
+.bar{display:flex;height:12px;width:220px;max-width:100%;border-radius:3px;overflow:hidden;background:var(--line)}
+.bar span{display:block;height:100%;min-width:2px;border-right:1px solid var(--card)}
+.arc{font-size:.8rem;color:var(--muted);margin-top:4px;max-width:44ch}
+td.n{text-align:right;font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
+tr.detail td{background:var(--bg);padding:0 12px 14px}
+tr.detail table{background:var(--card);border:1px solid var(--line);border-radius:8px;margin-top:10px}
+tr.detail td td,tr.detail th{padding:6px 10px}
+.st{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.st i{width:9px;height:9px;border-radius:2px;display:inline-block}
+.flag{font-size:.78rem;color:var(--warn-ink);background:var(--warn-bg);border-radius:4px;padding:1px 6px;white-space:nowrap}
+footer{color:var(--muted);font-size:.85rem;max-width:72ch}
+@media (max-width:760px){.answers,.notes{grid-template-columns:1fr}h1{font-size:1.5rem}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow" id="eyebrow"></span>
+    <h1 id="h1"></h1>
+    <p class="scope" id="scope"></p>
+  </header>
+
+  <section class="answers" aria-label="What was asked">
+    <div class="answer"><span class="eyebrow">Complete arcs</span><span class="big" id="nFull"></span><p>Closed cases that passed through New, In progress, Waiting for response, Resolved and Closed.</p></div>
+    <div class="answer"><span class="eyebrow">Bounced twice or more</span><span class="big" id="nBounced"></span><p>Waiting for response → In progress at least twice. The cases most likely to break a time calculation.</p></div>
+    <div class="answer"><span class="eyebrow">Reassigned</span><span class="big" id="nReassigned"></span><p>Owner changed at least once. Handoffs through a blank owner count once.</p></div>
+  </section>
+
+  <div class="verdict">
+    <strong>Does reassignment create a new row? Yes.</strong>
+    <p id="verdict"></p>
+  </div>
+
+  <section style="display:grid;gap:12px">
+    <h2>What to plan for in the time calculations</h2>
+    <ul class="notes">
+      <li><b>One row per change, not per status</b><span>A new row starts when status, owner, group, priority or service item changes. Consecutive rows often share a status, so group by status before summing.</span></li>
+      <li><b>Handoffs pass through a blank owner</b><span>Owner A → (no owner) → Owner B is common. Count reassignments between named owners, or each handoff counts twice.</span></li>
+      <li><b>New repeats at the start</b><span>Most cases open with two or three New rows seconds apart while the service item and deadline are set. Treat them as one New period.</span></li>
+      <li><b>Status can move backwards</b><span>Some cases go In progress → New, for example when sent back to the queue. Don't assume a forward-only order.</span></li>
+      <li><b>The Closed row never ends</b><span>Its EndDate is 0001-01-01 rather than blank, and its duration columns are 0. It's shown as "open" here; leave it out of time totals.</span></li>
+      <li><b>No substatus in the history</b><span>CaseLifecycle has no substatus column, so client-blocked and internally-blocked waiting can't be separated from these rows.</span></li>
+      <li><b>Calendar time only</b><span>Durations are End − Start in calendar time. There's no business-hours adjustment in the data.</span></li>
+    </ul>
+  </section>
+
+  <section style="display:grid;gap:12px">
+    <div class="toolbar">
+      <h2><span id="nAll"></span> cases</h2>
+      <div class="seg" role="group" aria-label="Filter cases" id="filters"></div>
+    </div>
+    <div class="legend" id="legend"></div>
+    <p class="muted" style="font-size:.88rem">The bar shows how each case's open time split across statuses, to scale within that case. Select a case to see every lifecycle row.</p>
+    <div class="table">
+      <table>
+        <thead><tr><th>Case</th><th>Category</th><th>Time by status</th><th>Owner (final)</th><th style="text-align:right">Rows</th><th style="text-align:right">Bounces</th><th style="text-align:right">Owner changes</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+
+<script>
+const DATA = __DATA__;
+const ST = {"New":"--s-new","In progress":"--s-prog","Waiting for response":"--s-wait","Resolved":"--s-res","Closed":"--s-closed","Reopened":"--s-reopen"};
+const CAT = {full:"Full arc",bounced:"Bounced 2+",reassigned:"Reassigned"};
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const col = s => `var(${ST[s] || "--muted"})`;
+const fmtD = iso => { if (!iso) return ""; const d = new Date(iso); return d.toLocaleString(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",timeZone:"UTC"}); };
+const fmtM = m => m == null ? "" : m < 60 ? `${m}m` : m < 1440 ? `${(m/60).toFixed(1)}h` : `${(m/1440).toFixed(1)}d`;
+const m = DATA.meta, cases = DATA.cases;
+const count = k => cases.filter(c => c.tags.includes(k)).length;
+
+document.getElementById("eyebrow").textContent = `CaseLifecycle · ${m.group}`;
+document.getElementById("h1").textContent = document.title;
+document.getElementById("scope").textContent =
+  `The ${cases.length} most recent closed cases in the ${m.group} group created on or after ${m.since}` +
+  (m.first ? ` (created ${m.first} to ${m.last})` : "") +
+  `, with every lifecycle row Creatio holds for them. Pulled ${m.pulled}; all times UTC.`;
+document.getElementById("nFull").textContent = count("full");
+document.getElementById("nBounced").textContent = count("bounced");
+document.getElementById("nReassigned").textContent = count("reassigned");
+document.getElementById("nAll").textContent = cases.length;
+document.getElementById("verdict").textContent =
+  `${m.reassignOnlyRows} rows start on an owner change with no status change, and ${count("reassigned")} of ${cases.length} cases changed owner at least once.`;
+document.getElementById("legend").innerHTML = Object.keys(ST).map(s => `<span><i style="background:${col(s)}"></i>${esc(s)}</span>`).join("");
+document.getElementById("foot").textContent =
+  "Source: nelnet.creatio.com OData, CaseLifecycle and Case (read-only). Generated by Creatio Case Lookup.";
+
+let filter = "all";
+const filters = [["all","All"],["full","Full arc"],["bounced","Bounced 2+"],["reassigned","Reassigned"]];
+function renderFilters(){
+  document.getElementById("filters").innerHTML = filters.map(([k,l]) =>
+    `<button type="button" data-f="${k}" aria-pressed="${k===filter}">${l} (${k==="all"?cases.length:count(k)})</button>`).join("");
+  document.querySelectorAll("#filters button").forEach(b => b.onclick = () => { filter = b.dataset.f; renderFilters(); render(); });
+}
+function bar(c){
+  const t = {}; let tot = 0;
+  for (const r of c.rows) if (r[5] != null) { t[r[0]] = (t[r[0]]||0) + r[5]; tot += r[5]; }
+  const order = ["New","In progress","Waiting for response","Resolved","Reopened"];
+  return `<div class="bar" role="img" aria-label="${esc(order.filter(s=>t[s]).map(s=>`${s} ${fmtM(t[s])}`).join(", "))}">` +
+    order.filter(s => t[s]).map(s => `<span style="width:${(t[s]/tot*100).toFixed(2)}%;background:${col(s)}" title="${esc(s)}: ${fmtM(t[s])}"></span>`).join("") + "</div>";
+}
+function detail(c){
+  let prev = null;
+  const body = c.rows.map((r,i) => {
+    const flags = [];
+    if (prev && prev[0] === r[0] && prev[1] !== r[1]) flags.push("owner change");
+    else if (prev && prev[0] === r[0]) flags.push("same status");
+    if (!r[1]) flags.push("no owner");
+    prev = r;
+    return `<tr><td class="n">${i+1}</td><td><span class="st"><i style="background:${col(r[0])}"></i>${esc(r[0])}</span></td><td>${esc(r[1]) || '<span class="muted">—</span>'}</td>
+      <td class="mono">${esc(fmtD(r[3]))}</td><td class="mono">${r[4] ? esc(fmtD(r[4])) : '<span class="muted">open</span>'}</td><td class="n">${fmtM(r[5])}</td>
+      <td>${flags.map(f => `<span class="flag">${f}</span>`).join(" ")}</td></tr>`;
+  }).join("");
+  return `<table><thead><tr><th>#</th><th>Status</th><th>Owner</th><th>Start</th><th>End</th><th style="text-align:right">Duration</th><th>Note</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+function render(){
+  const shown = cases.filter(c => filter === "all" || c.tags.includes(filter));
+  document.getElementById("rows").innerHTML = shown.map(c => `
+    <tr class="case" tabindex="0" aria-expanded="false" data-n="${esc(c.num)}">
+      <td><span class="num">${esc(c.num)}</span><div class="subj" title="${esc(c.subj)}">${esc(c.subj)}</div></td>
+      <td>${c.tags.map(t => `<span class="tag ${t}">${CAT[t]}</span>`).join(" ") || '<span class="muted">—</span>'}</td>
+      <td>${bar(c)}<div class="arc">${c.arc.map(esc).join(" → ")}</div></td>
+      <td>${esc(c.owner)}</td><td class="n">${c.rows.length}</td><td class="n">${c.bounces}</td><td class="n">${c.reassign}</td>
+    </tr>
+    <tr class="detail" data-for="${esc(c.num)}" hidden><td colspan="7">${detail(c)}</td></tr>`).join("");
+  document.querySelectorAll("tr.case").forEach(tr => {
+    const toggle = () => { const d = document.querySelector(`tr.detail[data-for="${tr.dataset.n}"]`); d.hidden = !d.hidden; tr.setAttribute("aria-expanded", String(!d.hidden)); };
+    tr.onclick = toggle;
+    tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } };
+  });
+}
+renderFilters(); render();
+</script>

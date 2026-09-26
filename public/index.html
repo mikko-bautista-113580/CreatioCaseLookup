@@ -20,8 +20,10 @@
         </div>
       </div>
       <nav class="tabs">
-        <button class="tab active" data-tab="lookup">Lookup</button>
+        <button class="tab active" data-tab="setup">Setup <span class="tab-badge hidden" id="setupBadge"></span></button>
+        <button class="tab" data-tab="lookup">Lookup</button>
         <button class="tab" data-tab="workspace">Workspace</button>
+        <button class="tab" data-tab="lifecycle">Lifecycle</button>
         <button class="tab" data-tab="settings">Settings</button>
       </nav>
     </header>
@@ -31,8 +33,26 @@
       <button class="link" data-goto="settings">Open Settings →</button>
     </div>
 
+    <!-- ============================ SETUP ============================ -->
+    <!-- The checklist start-app.bat prints on launch, re-run live here. -->
+    <main id="tab-setup" class="tab-panel active">
+      <section class="card">
+        <h2>Setup checklist</h2>
+        <p class="hint">
+          What this computer needs for each part of the app. The same check runs every time you start
+          <code>start-app.bat</code>, and its results show in that window.
+        </p>
+        <div id="setupSummary" class="setup-summary"></div>
+        <div class="actions">
+          <button id="setupRecheck" class="secondary">Check again</button>
+          <span id="setupStatus" class="status"></span>
+        </div>
+      </section>
+      <section id="setupList"></section>
+    </main>
+
     <!-- ============================ LOOKUP ============================ -->
-    <main id="tab-lookup" class="tab-panel active">
+    <main id="tab-lookup" class="tab-panel">
       <section class="card search">
         <div class="field">
           <label>1 · Select cases by</label>
@@ -193,6 +213,72 @@
       <section id="wsFixPlan" class="card hidden"></section>
     </main>
 
+    <!-- ============================ LIFECYCLE ============================ -->
+    <!-- A team's closed cases with every CaseLifecycle row: the status/owner
+         history behind waiting-time, bounce and reassignment reporting. -->
+    <main id="tab-lifecycle" class="tab-panel">
+      <section class="card search">
+        <h2>Case lifecycle sample</h2>
+        <p class="hint">
+          Pulls closed cases for a team and every status/owner period Creatio recorded for
+          them (<code>CaseLifecycle</code>). Only the top-level status is recorded —
+          substatus history is not kept. Needs <code>CaseLifecycle</code> in the allowlist.
+        </p>
+        <p id="lcAllowHint" class="status err hidden"></p>
+
+        <div class="field">
+          <label for="lcOwner">1 · Team member</label>
+          <div class="row">
+            <input id="lcOwner" type="text" placeholder="e.g. Melissa Holland" autocomplete="off" />
+            <button id="lcFindOwner" class="secondary">Find</button>
+          </div>
+          <div id="lcOwnerCands" class="candidates hidden"></div>
+          <p class="hint">Pick a person — their team is taken from the group on their cases.</p>
+        </div>
+
+        <div class="field hidden" id="lcGroupField">
+          <label>2 · Team (assignee group)</label>
+          <div class="chips" id="lcGroups"></div>
+        </div>
+
+        <div class="two-col">
+          <div class="field">
+            <label for="lcSince">Created on or after</label>
+            <input id="lcSince" type="date" value="2025-09-01" />
+          </div>
+          <div class="field">
+            <label for="lcMax">Max cases (newest first)</label>
+            <input id="lcMax" type="number" min="1" max="300" value="100" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label>3 · Output</label>
+          <div class="chips" id="lcOutputs">
+            <label class="chip"><input type="checkbox" value="app" checked disabled />In this app</label>
+            <label class="chip"><input type="checkbox" value="xlsx" checked />Excel file</label>
+            <label class="chip"><input type="checkbox" value="artifact" id="lcOutArtifact" />Artifact (claude.ai)</label>
+          </div>
+          <p class="hint">
+            Excel downloads when the pull finishes. Artifact publishes a report page to your claude.ai
+            account through the Claude CLI and shows its link; it's private until you share it.
+          </p>
+        </div>
+
+        <div class="actions">
+          <button id="lcRun" class="primary" disabled>Pull lifecycle</button>
+          <span id="lcStatus" class="status"></span>
+        </div>
+        <div id="lcProgress" class="progress hidden">
+          <div class="progress-track"><div class="progress-fill" id="lcProgressFill"></div></div>
+          <span class="progress-label" id="lcProgressLabel"></span>
+        </div>
+        <div id="lcOutputsDone" class="lc-outputs hidden"></div>
+      </section>
+
+      <section id="lcResults" class="results"></section>
+    </main>
+
     <!-- ============================ SETTINGS ============================ -->
     <main id="tab-settings" class="tab-panel">
       <section class="card">
@@ -259,6 +345,34 @@
           <button id="saveCfgBtn" class="primary">Save</button>
           <button id="testCfgBtn" class="secondary">Test connection</button>
           <span id="cfgStatus" class="status"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Claude settings</h2>
+        <p class="hint">
+          Used by every AI feature in the app: Ask AI, workspace analysis, fix plans and publishing
+          artifacts. Saved to <code>.claude/settings.json</code>, so Claude Code sessions opened on this
+          folder use them too. Changes apply to the next run, with no restart.
+        </p>
+        <div class="three-col">
+          <div class="field">
+            <label for="aiModel">Model</label>
+            <select id="aiModel"></select>
+          </div>
+          <div class="field">
+            <label for="aiEffort">Effort</label>
+            <select id="aiEffort"></select>
+          </div>
+          <div class="field">
+            <label for="aiStyle">Output style</label>
+            <select id="aiStyle"></select>
+          </div>
+        </div>
+        <p class="hint" id="aiEffective"></p>
+        <div class="actions">
+          <button id="aiSaveBtn" class="primary">Save Claude settings</button>
+          <span id="aiStatus" class="status"></span>
         </div>
       </section>
     </main>

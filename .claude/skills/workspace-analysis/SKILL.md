@@ -20,7 +20,7 @@ break both readers.
 
 ## Prerequisites
 
-- Run commands from the repo root (`C:\neldevsrc\Github\CreatioCaseLookup`).
+- Run commands from the repo root (the folder with `pyproject.toml`).
 - The CLI needs the project's Python environment. If `.venv` is missing, create it: `python -m venv .venv` then `.venv/Scripts/python -m pip install -e .`
 - Everything here is **read-only**. This skill analyzes and records; it never
   edits the user's files. Applying a change is `creatio-case-fix`'s job, behind

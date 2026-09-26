@@ -33,7 +33,7 @@ def test_build_args_full_spec_matches_ts_order():
         safe_mode=True,
         add_dirs=["C:/a", "C:/b"],
         permission_mode="acceptEdits",
-        model="claude-opus-5",
+        model="claude-opus-5-5",
     )
     assert build_args(spec) == [
         "-p", 'Do "the" thing',
@@ -51,7 +51,7 @@ def test_build_args_full_spec_matches_ts_order():
         "--safe-mode",
         "--add-dir", "C:/a",
         "--add-dir", "C:/b",
-        "--model", "claude-opus-5",
+        "--model", "claude-opus-5-5",
     ]
 
 
@@ -142,6 +142,15 @@ def test_empty_stdin_still_closed(fake):
     assert out["chunks"] == ["STDIN:"]
 
 
+def test_spec_env_reaches_child_on_top_of_ours(fake, monkeypatch):
+    fake("entrypoint")
+    monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
+    assert run(spec(stdin=""))["chunks"] == ["<unset>"]
+    # Extra vars are added; the app's own (FAKE_CLAUDE_MODE here) still arrive.
+    s = RunSpec(instruction="i", system_prompt="S", stdin="", env={"CLAUDE_CODE_ENTRYPOINT": "claude-desktop"})
+    assert run(s)["chunks"] == ["claude-desktop"]
+
+
 def test_argv_reaches_child_intact(fake):
     fake("argv")
     s = RunSpec(instruction='say "hi" --tools x', system_prompt="S", stdin="")
@@ -173,7 +182,7 @@ def test_app_settings_reach_the_child_filtered(fake, monkeypatch, tmp_path):
     monkeypatch.setattr("creatio_case_lookup.env.read_env_file", lambda: {})
     assert analyze.default_model() == "claude-opus-5-5"
     monkeypatch.setattr("creatio_case_lookup.env.read_env_file", lambda: {"CREATIO_APP_MODEL": "claude-sonnet-5"})
-    assert analyze.default_model() == "claude-sonnet-5"  # .env still wins
+    assert analyze.default_model() == "claude-opus-5-5"  # settings.json wins over .env
     settings.write_text("{not json", encoding="utf-8")
     assert claude_run.app_settings() == {} and claude_run.app_settings_file() is None
 

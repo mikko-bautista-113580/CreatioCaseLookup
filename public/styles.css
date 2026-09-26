@@ -72,6 +72,19 @@ code { background: var(--accent); padding: 0.1em 0.35em; border-radius: 5px; fon
 /* Layout */
 .tab-panel { display: none; max-width: 1000px; margin: 1.25rem auto; padding: 0 1.25rem; }
 .tab-panel.active { display: block; }
+/* Lifecycle: wide, so a case's arc, counts and timings sit on one line. */
+#tab-lifecycle { max-width: 1680px; }
+#tab-lifecycle > .search { max-width: 1000px; }
+table.lc-table td { white-space: nowrap; }
+table.lc-table td.lc-subj { white-space: normal; min-width: 16rem; max-width: 26rem; }
+table.lc-table td.lc-arc { white-space: normal; min-width: 18rem; }
+table.lc-table td.n, table.lc-table th.n { text-align: right; font-variant-numeric: tabular-nums; }
+table.lc-table tr.lc-detail > td { background: var(--bg); padding: 0.4rem 0.8rem 0.9rem 2rem; }
+table.lc-table tr.lc-detail table { background: var(--card); border: 1px solid var(--line); border-radius: 8px; width: auto; min-width: 60%; }
+.lc-tag { font-size: 0.72rem; font-weight: 600; padding: 0.08rem 0.45rem; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); margin-right: 0.2rem; }
+.lc-flag { font-size: 0.75rem; color: var(--warn); }
+.lc-outputs { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; margin-top: 0.75rem; font-size: 0.9rem; }
+.lc-outputs a { overflow-wrap: anywhere; }
 .card {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
   box-shadow: var(--shadow); padding: 1.25rem; margin-bottom: 1.25rem;
@@ -82,11 +95,13 @@ code { background: var(--accent); padding: 0.1em 0.35em; border-radius: 5px; fon
 .row { display: flex; gap: 0.5rem; }
 .hint { font-size: 0.8rem; color: var(--muted); margin: 0.4rem 0 0; }
 
-input[type="text"], input[type="password"], input[type="number"] {
+input[type="text"], input[type="password"], input[type="number"], select {
   width: 100%; padding: 0.6rem 0.7rem; border: 1px solid var(--line);
   border-radius: 9px; background: var(--bg); color: var(--ink); font-size: 0.95rem;
 }
-input:focus { outline: 2px solid var(--brand); outline-offset: 0; border-color: var(--brand); }
+input:focus, select:focus { outline: 2px solid var(--brand); outline-offset: 0; border-color: var(--brand); }
+.three-col { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+@media (max-width: 640px) { .three-col { grid-template-columns: 1fr; } }
 
 /* Buttons */
 button { font-family: inherit; }
@@ -701,3 +716,33 @@ td.row-actions { white-space: nowrap; display: flex; gap: 0.3rem; align-items: c
 /* A stored plan is offered, not reopened, after a reload. */
 .ws-last-plan { margin-top: 0.5rem; }
 .ws-last-plan .link { font-size: inherit; }
+
+/* ---------------------------------------------------------------------------
+   Setup tab: start-up checklist
+   --------------------------------------------------------------------------- */
+.tab-badge { display: inline-block; min-width: 1.3em; margin-left: 0.3rem; padding: 0 0.35em; border-radius: 999px; background: var(--warn); color: #fff; font-size: 0.72rem; font-weight: 700; line-height: 1.45; text-align: center; }
+.tab-badge.fail { background: var(--danger); }
+.setup-verdict { margin: 0.25rem 0 0.5rem; font-weight: 600; }
+.setup-verdict.ok { color: var(--ok); }
+.setup-verdict.warn { color: var(--warn); }
+.setup-verdict.fail { color: var(--danger); }
+.setup-items { list-style: none; margin: 0; padding: 0; display: grid; }
+.setup-item { display: grid; grid-template-columns: 1.4rem 1fr; gap: 0.6rem; padding: 0.7rem 0; border-top: 1px solid var(--line); }
+.setup-item:first-child { border-top: 0; }
+.setup-mark { width: 1.1rem; height: 1.1rem; border-radius: 50%; margin-top: 0.15rem; display: grid; place-items: center; color: #fff; font-size: 0.7rem; font-weight: 700; }
+.setup-item.ok .setup-mark { background: var(--ok); }
+.setup-item.ok .setup-mark::after { content: "✓"; }
+.setup-item.warn .setup-mark { background: var(--warn); }
+.setup-item.warn .setup-mark::after { content: "!"; }
+.setup-item.fail .setup-mark { background: var(--danger); }
+.setup-item.fail .setup-mark::after { content: "✕"; }
+.setup-item.skip .setup-mark { background: var(--line); }
+.setup-label { font-weight: 600; }
+.setup-state { font-size: 0.72rem; font-weight: 600; color: var(--muted); margin-left: 0.4rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.setup-item.warn .setup-state { color: var(--warn); }
+.setup-item.fail .setup-state { color: var(--danger); }
+.setup-detail { font-size: 0.88rem; color: var(--muted); overflow-wrap: anywhere; }
+.setup-fix { font-size: 0.88rem; margin-top: 0.2rem; }
+.setup-fix::before { content: "Fix: "; font-weight: 600; }
+.setup-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin-top: 0.35rem; }
+.setup-actions:empty { display: none; }

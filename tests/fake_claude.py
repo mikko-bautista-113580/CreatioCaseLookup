@@ -45,6 +45,8 @@ def main():
         emit({"type": "result", "subtype": "success", "result": "done"})
     elif mode == "argv":
         delta(json.dumps(sys.argv[1:]))
+    elif mode == "entrypoint":
+        delta(os.environ.get("CLAUDE_CODE_ENTRYPOINT", "<unset>"))
         emit({"type": "result", "subtype": "success", "result": "done"})
     elif mode == "result_only":
         # No trailing newline on the last line: exercises the close-time flush.

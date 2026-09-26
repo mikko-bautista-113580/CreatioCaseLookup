@@ -43,8 +43,10 @@ function hideAuthBanner() { $("#authBanner").classList.add("hidden"); }
 function switchTab(name) {
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
   $$(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === "tab-" + name));
-  if (name === "settings") loadConfig();
+  if (name === "settings") { loadConfig(); loadClaudeSettings(); }
   else if (name === "workspace") loadWorkspace();
+  else if (name === "lifecycle") lcCheckAllowed();
+  else if (name === "setup") loadSetup();
 }
 $$(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
 document.addEventListener("click", (e) => {
@@ -3121,6 +3123,405 @@ $("#wscValue").addEventListener("keydown", (e) => {
 });
 
 // ---------------------------------------------------------------------------
+// Lifecycle tab: a team's closed cases with their CaseLifecycle rows
+// ---------------------------------------------------------------------------
+const lc = { groupId: "", groupName: "", data: null, filter: "all", artifactUrl: "" };
+
+const LC_FILTERS = {
+  all: { label: "All", test: () => true },
+  full: { label: "Full arc", test: (c) => c.fullArc },
+  bounced: { label: "Bounced 2+", test: (c) => c.bounces >= 2 },
+  reassigned: { label: "Reassigned", test: (c) => c.reassignments > 0 },
+};
+
+function lcCheckAllowed() {
+  const al = state.meta?.allowlist || [];
+  const hint = $("#lcAllowHint");
+  const blocked = al.length && !al.includes("CaseLifecycle");
+  hint.classList.toggle("hidden", !blocked);
+  hint.textContent = blocked
+    ? "CaseLifecycle is not in the allowlist. Add it under Settings → Allowed entities, then restart the app."
+    : "";
+}
+
+async function lcFindOwner() {
+  const name = $("#lcOwner").value.trim();
+  if (!name) return;
+  const box = $("#lcOwnerCands");
+  box.classList.remove("hidden");
+  box.innerHTML = '<div class="candidate"><span class="spinner"></span>&nbsp;Searching…</div>';
+  try {
+    const { candidates } = await api(`/api/resolve?type=owner&name=${encodeURIComponent(name)}`);
+    if (!candidates.length) { box.innerHTML = '<div class="candidate">No matches found.</div>'; return; }
+    box.innerHTML = candidates
+      .map((c) => `<div class="candidate" data-id="${esc(c.Id)}"><span>${esc(c.Name)}</span><span class="cid">${esc(c.Id.slice(0, 8))}…</span></div>`)
+      .join("");
+    box.querySelectorAll(".candidate[data-id]").forEach((el) =>
+      el.addEventListener("click", () => {
+        box.querySelectorAll(".candidate").forEach((c) => c.classList.toggle("chosen", c === el));
+        lcLoadGroups(el.dataset.id);
+      })
+    );
+    if (candidates.length === 1) box.querySelector(".candidate[data-id]").click();
+  } catch (e) {
+    box.innerHTML = `<div class="candidate">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+async function lcLoadGroups(ownerId) {
+  const field = $("#lcGroupField");
+  const box = $("#lcGroups");
+  field.classList.remove("hidden");
+  box.innerHTML = '<span class="spinner"></span>';
+  lc.groupId = "";
+  $("#lcRun").disabled = true;
+  try {
+    const { groups } = await api(`/api/lifecycle/groups?owner=${encodeURIComponent(ownerId)}`);
+    if (!groups.length) { box.innerHTML = '<span class="muted">No group on this person\'s recent cases.</span>'; return; }
+    box.innerHTML = groups
+      .map((g, i) => `<label class="chip"><input type="radio" name="lcGroup" value="${esc(g.Id)}" data-name="${esc(g.Name)}" ${i === 0 ? "checked" : ""}/>${esc(g.Name)} <span class="muted">(${g.count})</span></label>`)
+      .join("");
+    const pick = () => {
+      const inp = box.querySelector("input:checked");
+      lc.groupId = inp?.value || "";
+      lc.groupName = inp?.dataset.name || "";
+      $("#lcRun").disabled = !lc.groupId;
+    };
+    box.querySelectorAll("input").forEach((i) => i.addEventListener("change", pick));
+    pick();
+  } catch (e) {
+    box.innerHTML = `<span class="status err">${esc(e.message)}</span>`;
+  }
+}
+
+function fmtMins(m) {
+  if (m == null) return "—";
+  if (m < 60) return `${m}m`;
+  if (m < 1440) return `${(m / 60).toFixed(1)}h`;
+  return `${(m / 1440).toFixed(1)}d`;
+}
+
+function lcProgress(pct, label) {
+  $("#lcProgress").classList.toggle("hidden", pct === false);
+  const fill = $("#lcProgressFill");
+  if (pct == null) { fill.classList.add("indeterminate"); fill.style.width = "35%"; }
+  else if (pct !== false) { fill.classList.remove("indeterminate"); fill.style.width = pct + "%"; }
+  $("#lcProgressLabel").textContent = label || "";
+}
+
+// Case paging is a small share of the work; per-case rows are the rest.
+function lcProgressFrom(p) {
+  if (p.phase === "cases") return [Math.min(10, Math.round((p.done / p.total) * 10)), `Finding cases… ${p.done} so far`];
+  const pct = p.total ? 10 + Math.round((p.done / p.total) * 90) : 100;
+  return [pct, `Reading lifecycle rows: ${p.done}/${p.total} cases (${pct}%)`];
+}
+
+async function lcRun() {
+  const btn = $("#lcRun");
+  const status = $("#lcStatus");
+  const outs = $("#lcOutputsDone");
+  const wantXlsx = $('#lcOutputs input[value="xlsx"]').checked;
+  const wantArtifact = $("#lcOutArtifact").checked;
+  btn.disabled = true;
+  status.className = "status";
+  status.textContent = "";
+  outs.classList.add("hidden");
+  outs.innerHTML = "";
+  $("#lcResults").innerHTML = "";
+  lc.data = null;
+  lc.artifactUrl = "";
+  lcProgress(null, "Starting…");
+  try {
+    const res = await fetch("/api/lifecycle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        groupId: lc.groupId, groupName: lc.groupName, since: $("#lcSince").value,
+        maxCases: Number($("#lcMax").value) || 100,
+      }),
+    });
+    if (!res.ok || !res.body) {
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401 && data.error === "auth") showAuthBanner(data.message);
+      throw new Error(data.message || `Pull failed (${res.status})`);
+    }
+    await consumeSse(res.body, {
+      progress: (p) => lcProgress(...lcProgressFrom(p)),
+      result: (d) => { lc.data = d; },
+      error: (d) => { if (d.kind === "auth") showAuthBanner(d.message); throw new Error(d.message || "Pull failed"); },
+    });
+    if (!lc.data) throw new Error("The pull ended without a result. Try again.");
+    const s = lc.data.summary;
+    lcProgress(100, `Done: ${s.cases} cases, ${s.rows} lifecycle rows`);
+    status.className = "status ok";
+    status.textContent = `${s.cases} cases · ${s.rows} lifecycle rows`;
+    lc.filter = "all";
+    lcRender();
+    lcShowOutputs();
+    if (s.cases && wantXlsx) lcDownloadXlsx();
+    if (s.cases && wantArtifact) lcPublish();
+  } catch (e) {
+    lcProgress(false);
+    status.className = "status err";
+    status.textContent = e.message;
+  } finally {
+    btn.disabled = !lc.groupId;
+  }
+}
+
+// Outputs row: always offers both, so a skipped one can still be made after.
+function lcShowOutputs() {
+  const outs = $("#lcOutputsDone");
+  if (!lc.data?.summary.cases) return;
+  outs.classList.remove("hidden");
+  outs.innerHTML = `
+    <span><button class="link" id="lcXlsxBtn">Download Excel file</button></span>
+    <span><a href="/api/lifecycle/report?run=${encodeURIComponent(lc.data.runId)}" target="_blank" rel="noopener">Open report page</a></span>
+    <span id="lcArtifactSlot"><button class="link" id="lcArtifactBtn">Publish as artifact</button></span>`;
+  $("#lcXlsxBtn").addEventListener("click", lcDownloadXlsx);
+  $("#lcArtifactBtn").addEventListener("click", lcPublish);
+}
+
+function lcDownloadXlsx() {
+  const a = Object.assign(document.createElement("a"), { href: `/api/lifecycle/export?run=${encodeURIComponent(lc.data.runId)}` });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function lcPublish() {
+  const slot = $("#lcArtifactSlot");
+  if (!state.meta?.aiAvailable) {
+    slot.innerHTML = `<span class="status err">The Claude CLI isn't installed, so the artifact can't be published.</span>`;
+    return;
+  }
+  slot.innerHTML = '<span class="spinner"></span> Publishing the artifact through Claude (about a minute)…';
+  try {
+    const { url } = await api("/api/lifecycle/publish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runId: lc.data.runId }),
+    });
+    lc.artifactUrl = url;
+    slot.innerHTML = `Artifact: <a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a> <span class="muted">(private until you share it)</span>`;
+  } catch (e) {
+    slot.innerHTML = `<span class="status err">Publishing failed: ${esc(e.message)}</span>
+      <button class="link" id="lcArtifactRetry">Try again</button>
+      <a href="/api/lifecycle/report?run=${encodeURIComponent(lc.data.runId)}" target="_blank" rel="noopener">Open the report here instead</a>`;
+    $("#lcArtifactRetry").addEventListener("click", lcPublish);
+  }
+}
+
+const LC_STATUS_COLS = ["New", "In progress", "Waiting for response", "Resolved"];
+
+function lcRender() {
+  const { cases, summary: s } = lc.data;
+  const shown = cases.filter(LC_FILTERS[lc.filter].test);
+  const counts = { all: s.cases, full: s.fullArc, bounced: s.bounced, reassigned: s.reassigned };
+  const tags = (c) => [c.fullArc && "Full arc", c.bounces >= 2 && "Bounced", c.reassignments > 0 && "Reassigned"].filter(Boolean);
+  const day = (iso) => (iso ? String(iso).slice(0, 10) : "");
+  const notes = [
+    `${s.reassignOnlyRows} rows start on a reassignment with no status change — Creatio writes a new row when the owner changes.`,
+    "Consecutive rows can share a status; the arc collapses them. Select a case to see every row.",
+    s.capped ? `${s.capped} case(s) hit the row cap, so their history may be incomplete.` : "",
+  ].filter(Boolean);
+  const cols = 9 + LC_STATUS_COLS.length;
+  $("#lcResults").innerHTML = `
+    <section class="card">
+      <div class="segmented" id="lcFilter">
+        ${Object.entries(LC_FILTERS).map(([k, f]) => `<button data-f="${k}" class="${k === lc.filter ? "active" : ""}">${f.label} (${counts[k]})</button>`).join("")}
+      </div>
+      ${notes.map((n) => `<p class="hint">${esc(n)}</p>`).join("")}
+      <div class="table-wrap">
+        <table class="cases lc-table">
+          <thead><tr>
+            <th>Case</th><th>Subject</th><th>Owner</th><th>Created</th><th>Closed</th><th>Status arc</th>
+            <th class="n">Rows</th><th class="n">Bounces</th><th class="n">Owner changes</th>
+            ${LC_STATUS_COLS.map((st) => `<th class="n">${esc(st === "Waiting for response" ? "Waiting" : st)}</th>`).join("")}
+          </tr></thead>
+          <tbody>
+            ${shown.map((c) => `
+              <tr class="case-row" data-id="${esc(c.Id)}">
+                <td class="num">${esc(c.Number)}<div>${tags(c).map((t) => `<span class="lc-tag">${t}</span>`).join("")}</div></td>
+                <td class="lc-subj">${esc(c.Subject || "")}</td>
+                <td>${esc(c.Owner)}</td>
+                <td>${esc(day(c.CreatedOn))}</td>
+                <td>${esc(day(c.ClosureDate))}</td>
+                <td class="lc-arc">${c.arc.map((a) => `<span class="st-badge ${stClass(a)}">${esc(a)}</span>`).join(" → ")}</td>
+                <td class="n">${c.rowCount}</td><td class="n">${c.bounces}</td><td class="n">${c.reassignments}</td>
+                ${LC_STATUS_COLS.map((st) => `<td class="n">${fmtMins(c.minutesByStatus[st])}</td>`).join("")}
+              </tr>
+              <tr class="lc-detail hidden" data-for="${esc(c.Id)}"><td colspan="${cols}">
+                <table class="cases"><thead><tr><th>#</th><th>Status</th><th>Owner</th><th>Group</th><th>Start</th><th>End</th><th class="n">Duration</th><th>Note</th></tr></thead>
+                <tbody>${lcDetailRows(c.rows)}</tbody></table>
+              </td></tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>`;
+  $$("#lcFilter button").forEach((b) => b.addEventListener("click", () => { lc.filter = b.dataset.f; lcRender(); }));
+  $$("#lcResults tr.case-row").forEach((tr) =>
+    tr.addEventListener("click", () => $(`#lcResults tr.lc-detail[data-for="${tr.dataset.id}"]`).classList.toggle("hidden"))
+  );
+}
+
+function lcDetailRows(rows) {
+  return rows.map((r, i) => {
+    const prev = rows[i - 1];
+    const notes = [];
+    if (prev && prev.status === r.status) notes.push(prev.owner !== r.owner ? "owner change" : "same status");
+    if (!r.owner) notes.push("no owner");
+    const owner = r.owner ? esc(r.owner) : '<span class="muted">—</span>';
+    const end = r.end ? esc(fmtDate(r.end)) : '<span class="muted">open</span>';
+    return `<tr><td class="n">${i + 1}</td><td><span class="st-badge ${stClass(r.status)}">${esc(r.status)}</span></td>
+      <td>${owner}</td><td>${esc(r.group)}</td><td>${esc(fmtDate(r.start))}</td><td>${end}</td>
+      <td class="n">${fmtMins(r.minutes)}</td><td>${notes.map((n) => `<span class="lc-flag">${n}</span>`).join(" ")}</td></tr>`;
+  }).join("");
+}
+
+$("#lcFindOwner").addEventListener("click", lcFindOwner);
+$("#lcOwner").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); lcFindOwner(); } });
+$("#lcRun").addEventListener("click", lcRun);
+
+// ---------------------------------------------------------------------------
+// Settings: Claude settings (.claude/settings.json), used by every AI run
+// ---------------------------------------------------------------------------
+const AI_LABELS = {
+  "claude-opus-5-5": "Opus 5.5 (default)",
+  "claude-sonnet-5": "Sonnet 5 (faster)",
+  "claude-haiku-4-5-20251001": "Haiku 4.5 (fastest, cheapest)",
+  "claude-fable-5-1": "Fable 5.1",
+  default: "Default",
+};
+
+function fillSelect(sel, choices, current) {
+  // Keep a value set by hand in settings.json even if it isn't a listed choice.
+  const all = current && !choices.includes(current) ? [current, ...choices] : choices;
+  sel.innerHTML = all.map((v) => `<option value="${esc(v)}" ${v === current ? "selected" : ""}>${esc(AI_LABELS[v] || v)}</option>`).join("");
+}
+
+function showEffectiveModel(d) {
+  $("#aiEffective").textContent = d.model
+    ? `Every AI run uses ${d.effectiveModel}.`
+    : d.envModel
+      ? `No model saved here yet, so runs use ${d.effectiveModel} from CREATIO_APP_MODEL in .env. Save to use this setting instead.`
+      : `No model saved yet; runs use ${d.effectiveModel}.`;
+}
+
+async function loadClaudeSettings() {
+  try {
+    const d = await api("/api/claude-settings");
+    fillSelect($("#aiModel"), d.choices.model, d.model);
+    fillSelect($("#aiEffort"), d.choices.effortLevel, d.effortLevel);
+    fillSelect($("#aiStyle"), d.choices.outputStyle, d.outputStyle);
+    showEffectiveModel(d);
+  } catch (e) {
+    $("#aiStatus").className = "status err";
+    $("#aiStatus").textContent = e.message;
+  }
+}
+
+$("#aiSaveBtn").addEventListener("click", async () => {
+  const status = $("#aiStatus");
+  status.className = "status";
+  status.textContent = "Saving…";
+  try {
+    const d = await api("/api/claude-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: $("#aiModel").value, effortLevel: $("#aiEffort").value, outputStyle: $("#aiStyle").value }),
+    });
+    showEffectiveModel(d);
+    status.className = "status ok";
+    status.textContent = "Saved. The next AI run uses these settings.";
+  } catch (e) {
+    status.className = "status err";
+    status.textContent = e.message;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Setup tab: the start-up checklist, live
+// ---------------------------------------------------------------------------
+const SETUP_MARK = { ok: "Ready", warn: "Needs attention", fail: "Problem", skip: "Skipped" };
+let setupLoading = false;
+
+async function loadSetup() {
+  if (setupLoading) return;
+  setupLoading = true;
+  const status = $("#setupStatus");
+  $("#setupRecheck").disabled = true;
+  status.className = "status";
+  status.innerHTML = '<span class="spinner"></span> Checking…';
+  try {
+    const { checks, summary } = await api("/api/preflight");
+    renderSetup(checks, summary);
+    status.textContent = `Checked ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    status.className = "status err";
+    status.textContent = e.message;
+  } finally {
+    setupLoading = false;
+    $("#setupRecheck").disabled = false;
+  }
+}
+
+function renderSetup(checks, s) {
+  const open = s.fails + s.warnings;
+  const badge = $("#setupBadge");
+  badge.textContent = open;
+  badge.classList.toggle("hidden", !open);
+  badge.classList.toggle("fail", s.fails > 0);
+  $("#setupSummary").innerHTML = !open
+    ? `<p class="setup-verdict ok">Everything is ready.</p>`
+    : `<p class="setup-verdict ${s.fails ? "fail" : "warn"}">${
+        s.fails ? `${s.fails} problem${s.fails === 1 ? "" : "s"}` : ""}${s.fails && s.warnings ? " and " : ""}${
+        s.warnings ? `${s.warnings} item${s.warnings === 1 ? "" : "s"} to look at` : ""}. Each one says how to fix it.</p>`;
+
+  const groups = [...new Set(checks.map((c) => c.group))];
+  $("#setupList").innerHTML = groups.map((g) => `
+    <section class="card">
+      <h2>${esc(g)}</h2>
+      <ul class="setup-items">
+        ${checks.filter((c) => c.group === g).map((c) => `
+          <li class="setup-item ${c.status}">
+            <span class="setup-mark" aria-label="${SETUP_MARK[c.status]}"></span>
+            <div>
+              <div class="setup-label">${esc(c.label)} <span class="setup-state">${SETUP_MARK[c.status]}</span></div>
+              ${c.detail ? `<div class="setup-detail">${esc(c.detail)}</div>` : ""}
+              ${c.fix && c.status !== "ok" ? `<div class="setup-fix">${esc(c.fix)}</div>` : ""}
+              <div class="setup-actions">
+                ${c.id === "allowlist" && c.missing?.length ? `<button class="secondary" data-add-entities="${esc([...(c.current || []), ...c.missing].join(", "))}">Add ${esc(c.missing.join(", "))}</button>` : ""}
+                ${c.goto && c.status !== "ok" ? `<button class="link" data-goto="${esc(c.goto)}">Open Settings →</button>` : ""}
+              </div>
+            </div>
+          </li>`).join("")}
+      </ul>
+    </section>`).join("");
+
+  $$("#setupList [data-add-entities]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      b.disabled = true;
+      try {
+        const r = await api("/api/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ allowlist: b.dataset.addEntities }),
+        });
+        b.replaceWith(Object.assign(document.createElement("span"), {
+          className: "status ok",
+          textContent: r.restartNeeded ? "Saved. Restart the app (close its window and run start-app.bat) to use it." : "Saved.",
+        }));
+      } catch (e) {
+        b.disabled = false;
+        b.insertAdjacentHTML("afterend", ` <span class="status err">${esc(e.message)}</span>`);
+      }
+    })
+  );
+}
+$("#setupRecheck").addEventListener("click", loadSetup);
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 async function boot() {
@@ -3138,3 +3539,5 @@ async function boot() {
   }
 }
 boot();
+// The checklist loads on its own: it matters most when /api/meta fails.
+loadSetup();
