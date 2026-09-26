@@ -18,6 +18,12 @@ function fmtDate(iso) {
   });
 }
 
+// Name placeholders use the signed-in Windows user's full name (from /api/meta),
+// so each person sees their own name as the example.
+function exampleName() {
+  return `e.g. ${state.meta?.userName || "Jane Smith"}`;
+}
+
 async function api(path, opts) {
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
@@ -95,7 +101,7 @@ const state = {
 // Mode segmented control
 // ---------------------------------------------------------------------------
 const MODE_CFG = {
-  owner: { label: "Owner name", placeholder: "e.g. Leyba", hint: "Type a name, then pick the right person.", resolve: true },
+  owner: { label: "Owner name", get placeholder() { return exampleName(); }, hint: "Type a name, then pick the right person.", resolve: true },
   account: { label: "Account / school name", placeholder: "e.g. Hope Christian Academy", hint: "Type an account, then pick the right one.", resolve: true },
   number: { label: "Case number(s)", placeholder: "e.g. SR00026236, SR00031980", hint: "Comma-separate multiple SR numbers.", resolve: false },
   recent: { label: "", placeholder: "", hint: "Returns the newest cases regardless of owner.", resolve: false },
@@ -1656,7 +1662,7 @@ const WSC_MODE_CFG = {
   },
   owner: {
     label: "Owner name",
-    placeholder: "e.g. Leyba",
+    get placeholder() { return exampleName(); },
     hint: "Type a name, click Find, then pick the right person.",
     resolve: true,
     statuses: true,
@@ -3533,6 +3539,7 @@ async function boot() {
     $("#footBase").textContent = label;
     buildStatusChips();
     setMode("owner");
+    $("#lcOwner").placeholder = exampleName();
   } catch (e) {
     $("#baseUrlLabel").textContent = "error loading";
     console.error(e);

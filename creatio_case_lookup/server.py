@@ -351,9 +351,43 @@ def route(method: str, path: str) -> Callable[[Handler], Handler]:
     return deco
 
 
+def _display_name() -> str:
+    """The signed-in Windows user's display name ("Bautista, Lester Mikko"),
+    or "" when the OS doesn't provide one (non-Windows, local account)."""
+    if sys.platform != "win32":
+        return ""
+    try:
+        import ctypes
+
+        get = ctypes.windll.secur32.GetUserNameExW
+        size = ctypes.c_ulong(0)
+        get(3, None, ctypes.byref(size))  # 3 = NameDisplay
+        buf = ctypes.create_unicode_buffer(size.value)
+        return buf.value.strip() if size.value and get(3, buf, ctypes.byref(size)) else ""
+    except Exception:  # noqa: BLE001 — only an example name for placeholders
+        return ""
+
+
+def user_full_name(display: str | None = None) -> str:
+    """Full name for the "e.g. …" name placeholders, in "First Last" order so it
+    matches how Creatio names contacts: "Bautista, Lester Mikko" becomes
+    "Lester Mikko Bautista". "" when unknown."""
+    name = " ".join((_display_name() if display is None else display).split())
+    if "," in name:
+        last, first = (s.strip() for s in name.split(",", 1))
+        name = f"{first} {last}".strip()
+    return name
+
+
+_USER_NAME: str | None = None
+
+
 # Static config the UI needs to render its controls.
 @route("GET", "/api/meta")
 async def api_meta(request: Request) -> Response:
+    global _USER_NAME
+    if _USER_NAME is None:  # the signed-in user doesn't change while the app runs
+        _USER_NAME = user_full_name()
     return send_json(
         200,
         {
@@ -366,6 +400,7 @@ async def api_meta(request: Request) -> Response:
             "workspacePaths": get_workspace_paths(),
             "workspaceCap": file_cap(),
             "workspaceCase": get_bound_case(),
+            "userName": _USER_NAME,
         },
     )
 

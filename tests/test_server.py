@@ -105,12 +105,29 @@ def test_meta_shape(client, sandbox):
     assert r.headers["content-type"] == "application/json; charset=utf-8"
     d = r.json()
     assert list(d) == ["baseUrl", "allowlist", "maxTop", "statuses", "openActive", "aiAvailable",
-                       "workspacePaths", "workspaceCap", "workspaceCase"]
+                       "workspacePaths", "workspaceCap", "workspaceCase", "userName"]
     assert d["aiAvailable"] is False
     assert d["workspacePaths"] == [str(sandbox["ws"])]
     assert d["workspaceCap"] == 10
     assert d["workspaceCase"] == ""
     assert "New" in d["statuses"] and isinstance(d["statuses"], list)
+
+
+@pytest.mark.parametrize("display,full", [
+    ("Bautista, Lester Mikko", "Lester Mikko Bautista"),
+    ("Melissa Holland", "Melissa Holland"),
+    ("  Holland,   Melissa ", "Melissa Holland"),
+    ("Madonna", "Madonna"),
+    ("", ""),
+])
+def test_user_full_name(display, full):
+    assert server.user_full_name(display) == full
+
+
+def test_meta_user_name_from_os(client, monkeypatch):
+    monkeypatch.setattr(server, "_USER_NAME", None)
+    monkeypatch.setattr(server, "_display_name", lambda: "Holland, Melissa")
+    assert client.get("/api/meta").json()["userName"] == "Melissa Holland"
 
 
 def test_config_masks_cookies(client):
