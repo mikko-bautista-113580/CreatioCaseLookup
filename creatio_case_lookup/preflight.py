@@ -42,8 +42,25 @@ STAMP = PROJECT_ROOT / ".venv" / ".deps-sha256"
 REINSTALL = "Run start-app.bat again; it reinstalls packages. Or run: .venv\\Scripts\\python -m pip install -e \".[login]\""
 
 
+# One line per check saying what it's for, shown under its label.
+WHY: dict[str, str] = {
+    "python": "Runs the app's server and tools.",
+    "packages": "The web server, Creatio connection, Claude tools and Excel export are built on these.",
+    "port": "The app's web page is served on this port.",
+    "env": "Holds your Creatio address, sign-in and app settings.",
+    "baseurl": "Tells the app which Creatio site to read cases from.",
+    "signin": "Creatio only answers requests from a signed-in session.",
+    "connection": "Proves the saved sign-in actually works, so lookups won't fail later.",
+    "allowlist": "Limits which Creatio data the app may read; each tab needs its entities listed.",
+    "playwright": "Lets Log in with Creatio… open a browser and save the session cookies for you.",
+    "browser": "The browser that Log in with Creatio… opens for you to sign in.",
+    "claude": "Powers AI analysis, fix plans and publishing artifacts.",
+}
+
+
 def _check(id: str, group: str, label: str, status: str, detail: str = "", fix: str = "", **extra: Any) -> dict[str, Any]:
-    return {"id": id, "group": group, "label": label, "status": status, "detail": detail, "fix": fix, **extra}
+    return {"id": id, "group": group, "label": label, "status": status, "detail": detail, "fix": fix,
+            "why": WHY.get(id, ""), **extra}
 
 
 def _env() -> dict[str, str]:

@@ -3494,6 +3494,7 @@ function renderSetup(checks, s) {
             <span class="setup-mark" aria-label="${SETUP_MARK[c.status]}"></span>
             <div>
               <div class="setup-label">${esc(c.label)} <span class="setup-state">${SETUP_MARK[c.status]}</span></div>
+              ${c.why ? `<div class="setup-why">${esc(c.why)}</div>` : ""}
               ${c.detail ? `<div class="setup-detail">${esc(c.detail)}</div>` : ""}
               ${c.fix && c.status !== "ok" ? `<div class="setup-fix">${esc(c.fix)}</div>` : ""}
               <div class="setup-actions">

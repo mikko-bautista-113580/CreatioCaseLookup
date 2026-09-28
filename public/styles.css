@@ -741,6 +741,7 @@ td.row-actions { white-space: nowrap; display: flex; gap: 0.3rem; align-items: c
 .setup-state { font-size: 0.72rem; font-weight: 600; color: var(--muted); margin-left: 0.4rem; text-transform: uppercase; letter-spacing: 0.04em; }
 .setup-item.warn .setup-state { color: var(--warn); }
 .setup-item.fail .setup-state { color: var(--danger); }
+.setup-why { font-size: 0.88rem; }
 .setup-detail { font-size: 0.88rem; color: var(--muted); overflow-wrap: anywhere; }
 .setup-fix { font-size: 0.88rem; margin-top: 0.2rem; }
 .setup-fix::before { content: "Fix: "; font-weight: 600; }
