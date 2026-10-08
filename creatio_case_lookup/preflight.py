@@ -229,8 +229,23 @@ def check_port(host: str, port: int) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # All together
 # ---------------------------------------------------------------------------
+def hosted() -> bool:
+    """Running as a shared deployment (Azure Container Apps set CONTAINER_APP_NAME),
+    where the image and Terraform already provide Python, packages, browser,
+    Claude CLI, .env, base URL and allowlist."""
+    return bool(os.environ.get("CONTAINER_APP_NAME"))
+
+
 async def run_checks(include_port: bool = False, host: str = "127.0.0.1", port: int = 3000,
                      include_connection: bool = True) -> dict[str, Any]:
+    if hosted():
+        # Only what each person does themselves: sign in to Creatio, connect Claude
+        env = _env()
+        checks = [check_sign_in(env)]
+        if include_connection:
+            checks.append(await check_connection(env))
+        checks.append(check_claude_login())
+        return {"checks": checks, "summary": summarize(checks), "hosted": True}
     checks = [check_python(), check_packages()]
     if include_port:
         checks.append(check_port(host, port))
@@ -242,7 +257,7 @@ async def run_checks(include_port: bool = False, host: str = "127.0.0.1", port: 
     checks += [check_allowlist(env), check_playwright(), check_browser(), check_claude()]
     if checks[-1]["status"] == "ok":
         checks.append(check_claude_login())
-    return {"checks": checks, "summary": summarize(checks)}
+    return {"checks": checks, "summary": summarize(checks), "hosted": False}
 
 
 def summarize(checks: list[dict[str, Any]]) -> dict[str, Any]:

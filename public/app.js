@@ -3472,7 +3472,8 @@ async function loadSetup() {
   status.className = "status";
   status.innerHTML = '<span class="spinner"></span> Checking…';
   try {
-    const { checks, summary } = await api("/api/preflight");
+    const { checks, summary, hosted } = await api("/api/preflight");
+    if (hosted) $("#setupHint").textContent = "What you need to do once to use the app: sign in to Creatio and connect your own Claude account.";
     renderSetup(checks, summary);
     status.textContent = `Checked ${new Date().toLocaleTimeString()}`;
   } catch (e) {

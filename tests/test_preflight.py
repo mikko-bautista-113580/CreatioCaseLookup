@@ -164,3 +164,15 @@ def test_preflight_route(monkeypatch, tmp_path):
     assert by["baseurl"]["status"] == "fail" and by["connection"]["status"] == "skip"
     assert by["allowlist"]["status"] == "warn"
     assert d["summary"]["fails"] >= 1
+
+
+def test_hosted_shows_only_personal_steps(monkeypatch, tmp_path):
+    envp = tmp_path / ".env"
+    envp.write_text("", encoding="utf-8")
+    monkeypatch.setattr(paths, "ENV_PATH", envp)
+    monkeypatch.setattr(env, "ENV_PATH", envp)
+    monkeypatch.setattr(preflight, "ENV_PATH", envp)
+    monkeypatch.setenv("CONTAINER_APP_NAME", "ca-creatiocl-dev-lester")
+    d = asyncio.run(preflight.run_checks(include_connection=False))
+    assert d["hosted"] is True
+    assert [c["id"] for c in d["checks"]] == ["signin", "claudelogin"]
