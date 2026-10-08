@@ -109,3 +109,14 @@ def test_add_refused_plan_restores_list(monkeypatch, tmp_path):
         asyncio.run(go())
     assert "maria" in written[0]["developers"]
     assert written[-1]["developers"] == CFG["developers"]  # put back
+
+
+@pytest.mark.parametrize("text, url, code", [
+    ("To sign in, use a web browser to open the page https://login.microsoft.com/device and enter the code ATLLNF4T5 to authenticate.",
+     "https://login.microsoft.com/device", "ATLLNF4T5"),
+    ("To sign in, use a web browser to open the page https://microsoft.com/devicelogin and enter the code A1B2C3D4E to authenticate.",
+     "https://microsoft.com/devicelogin", "A1B2C3D4E"),
+])
+def test_device_code_message(text, url, code):
+    m = admin._DEVICE_RE.search(text)
+    assert m and m.group(1) == url and m.group(2) == code

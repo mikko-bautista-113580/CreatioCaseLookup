@@ -3628,7 +3628,7 @@ async function loadDevelopers() {
   if (!signedIn) {
     box.innerHTML = `<p>Adding someone creates Azure resources, so sign in to Azure with your own account first
       (once each time this app starts).</p>
-      <div class="actions"><button id="devAzureBtn">Sign in to Azure</button><span id="devAzureStatus" class="status"></span></div>`;
+      <div class="actions"><button id="devAzureBtn" class="primary">Sign in to Azure</button><span id="devAzureStatus" class="status"></span></div>`;
     $("#devAzureBtn").addEventListener("click", azureSignIn);
     return;
   }

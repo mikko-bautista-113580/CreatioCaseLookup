@@ -33,7 +33,9 @@ CONFIG_SECRET = "developers-config"
 NAME_RE = re.compile(r"^[a-z][a-z0-9]{0,11}$")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 CIDR_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}(/\d{1,2})?$")
-_DEVICE_RE = re.compile(r"(https://\S+devicelogin\S*).*?code\s+([A-Z0-9-]{6,})", re.S)
+# "...open the page https://login.microsoft.com/device and enter the code ABCD1234..."
+# (older CLIs say https://microsoft.com/devicelogin)
+_DEVICE_RE = re.compile(r"(https://\S+?)\s+and enter the code\s+([A-Z0-9-]{6,})", re.S)
 
 
 class AdminError(Exception):
