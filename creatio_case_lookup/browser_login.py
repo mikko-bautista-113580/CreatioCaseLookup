@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from .paths import PROFILE_DIR
@@ -33,12 +34,12 @@ POLL_S = 1.0
 TIMEOUT_S = 5 * 60  # give plenty of room for MFA prompts
 
 
-async def _launch_context(chromium: Any) -> Any:
+async def _launch_context(chromium: Any, profile_dir: Path = PROFILE_DIR) -> Any:
     last_err: BaseException | None = None
     for channel in ("chrome", "msedge"):
         try:
             return await chromium.launch_persistent_context(
-                str(PROFILE_DIR), channel=channel, headless=False
+                str(profile_dir), channel=channel, headless=False
             )
         except Exception as e:  # noqa: BLE001 — try the next channel
             last_err = e
@@ -50,7 +51,13 @@ async def _launch_context(chromium: Any) -> Any:
     )
 
 
-async def login_via_browser(base_url: str, on_progress: Callable[[str], None]) -> dict[str, str]:
+async def login_via_browser(
+    base_url: str,
+    on_progress: Callable[[str], None],
+    *,
+    profile_dir: Path = PROFILE_DIR,
+    on_context: Callable[[Any], None] | None = None,
+) -> dict[str, str]:
     """Open a browser window at `base_url` and wait for the user to finish
     logging in, detected by the .ASPXAUTH cookie appearing in the jar. Returns
     ``{"aspx", "csrf", "loader"}`` — the three cookies Settings otherwise asks
@@ -59,6 +66,8 @@ async def login_via_browser(base_url: str, on_progress: Callable[[str], None]) -
     `base_url` is passed in rather than read from creatio_client.BASE_URL so a
     URL the user just saved in Settings works without a restart.
     `on_progress` is a plain sync callable receiving user-facing messages.
+    `profile_dir` / `on_context` let the shared sign-in gate use a throwaway
+    profile per person and watch the context's traffic (see gate.py).
     """
     if not base_url:
         raise ValueError(
@@ -75,7 +84,9 @@ async def login_via_browser(base_url: str, on_progress: Callable[[str], None]) -
     on_progress("Opening browser…")
     pw = await async_playwright().start()
     try:
-        context = await _launch_context(pw.chromium)
+        context = await _launch_context(pw.chromium, profile_dir)
+        if on_context:
+            on_context(context)
 
         closed_early = False
 
