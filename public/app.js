@@ -3512,6 +3512,7 @@ function renderSetup(checks, s) {
                 ${c.id === "allowlist" && c.missing?.length ? `<button class="secondary" data-add-entities="${esc([...(c.current || []), ...c.missing].join(", "))}">Add ${esc(c.missing.join(", "))}</button>` : ""}
                 ${c.goto && c.status !== "ok" ? `<button class="link" data-goto="${esc(c.goto)}">Open Settings →</button>` : ""}
                 ${c.id === "claudelogin" && c.connect ? `<button class="${c.status === "ok" ? "link" : ""}" data-claude-connect>${c.status === "ok" ? "Reconnect Claude" : "Connect Claude"}</button>` : ""}
+                ${c.id === "claudelogin" && c.connect && c.status === "ok" ? `<button class="link" data-claude-disconnect>Disconnect Claude</button>` : ""}
               </div>
               ${c.id === "claudelogin" && c.connect ? `<div class="claude-connect hidden"></div>` : ""}
             </div>
@@ -3540,6 +3541,17 @@ function renderSetup(checks, s) {
   );
 
   $$("#setupList [data-claude-connect]").forEach((b) => b.addEventListener("click", () => connectClaude(b)));
+  $$("#setupList [data-claude-disconnect]").forEach((b) => b.addEventListener("click", async () => {
+    if (!confirm("Disconnect Claude? AI features stop until you connect again.")) return;
+    b.disabled = true;
+    try {
+      await api("/api/claude-connect/disconnect", { method: "POST" });
+      loadSetup();
+    } catch (e) {
+      b.disabled = false;
+      b.insertAdjacentHTML("afterend", ` <span class="status err">${esc(e.message)}</span>`);
+    }
+  }));
 }
 
 // Connect Claude: the server runs `claude setup-token` and hands back its

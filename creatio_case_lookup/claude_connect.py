@@ -187,6 +187,16 @@ def finish(code: str, timeout_s: float = 60) -> None:
     os.environ[TOKEN_KEY] = token
 
 
+def disconnect() -> None:
+    """Forget the saved token: AI runs stop until the user connects again.
+    (A token set from Key Vault comes back on the next restart.)"""
+    with _flow_lock:
+        if _flow:
+            _flow.close()
+    write_env_file({TOKEN_KEY: ""})
+    os.environ.pop(TOKEN_KEY, None)
+
+
 def _stop_if(flow: _Flow) -> None:
     global _flow
     with _flow_lock:

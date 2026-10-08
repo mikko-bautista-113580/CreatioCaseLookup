@@ -94,3 +94,15 @@ def test_full_flow_against_fake_cli(monkeypatch, tmp_path):
     claude_connect.finish("good#code", timeout_s=10)
     assert os.environ[claude_connect.TOKEN_KEY] == TOKEN
     assert f"{claude_connect.TOKEN_KEY}={TOKEN}" in envp.read_text()
+
+
+def test_disconnect_forgets_token(monkeypatch, tmp_path):
+    envp = tmp_path / ".env"
+    envp.write_text(f"{claude_connect.TOKEN_KEY}={TOKEN}\nOTHER=1\n", encoding="utf-8")
+    monkeypatch.setattr(paths, "ENV_PATH", envp)
+    monkeypatch.setattr(env, "ENV_PATH", envp)
+    monkeypatch.setenv(claude_connect.TOKEN_KEY, TOKEN)
+    with TestClient(server.app) as c:
+        assert c.post("/api/claude-connect/disconnect").json() == {"ok": True}
+    assert claude_connect.TOKEN_KEY not in os.environ
+    assert TOKEN not in envp.read_text() and "OTHER=1" in envp.read_text()

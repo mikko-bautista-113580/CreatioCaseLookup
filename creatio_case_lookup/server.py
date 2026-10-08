@@ -475,6 +475,14 @@ async def api_claude_connect_finish(request: Request) -> Response:
     return send_json(200, {"ok": True})
 
 
+@route("POST", "/api/claude-connect/disconnect")
+async def api_claude_connect_disconnect(request: Request) -> Response:
+    from . import claude_connect
+
+    claude_connect.disconnect()
+    return send_json(200, {"ok": True})
+
+
 @route("GET", "/api/test-auth")
 async def api_test_auth(request: Request) -> Response:
     return send_json(200, await test_connection())
