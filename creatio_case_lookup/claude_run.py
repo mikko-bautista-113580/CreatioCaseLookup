@@ -179,6 +179,32 @@ def claude_available() -> bool:
     return bool(_resolve_claude_launcher())
 
 
+def claude_login() -> str | None:
+    """How the Claude CLI will sign in, or None if it has nothing to sign in with.
+    No network: checks the env vars the CLI reads, then its saved login file."""
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "Using an API key (ANTHROPIC_API_KEY)."
+    if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        return "Using your Claude subscription token (CLAUDE_CODE_OAUTH_TOKEN)."
+    if sys.platform == "darwin":
+        return "Saved in the macOS keychain (not checked)."
+    config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    if (config_dir / ".credentials.json").is_file():
+        return "Using your saved Claude login."
+    return None
+
+
+def login_fix() -> str:
+    """What to do when Claude isn't signed in. Azure Container Apps set
+    CONTAINER_APP_NAME; there the container can't sign in interactively, so each
+    developer stores their own token with the infra repo's setup-claude.ps1."""
+    if os.environ.get("CONTAINER_APP_NAME"):
+        return ("This Azure app uses Claude on your own subscription and needs your token once. On your PC, "
+                "in the creatio-case-lookup-infra folder, run: .\\setup-claude.ps1 -Developer <your name>, "
+                "then try again.")
+    return "Open a terminal, run `claude`, sign in, then try again."
+
+
 def win_quote(a: str) -> str:
     """Quote one command-line token for the Windows shell. Wraps in double quotes
     and doubles any embedded quotes. Only ever applied to app-authored args."""
@@ -682,7 +708,7 @@ async def _run(
     if "login" in blob or "not logged in" in blob or "authenticat" in blob or "/login" in blob:
         on_error(
             ClaudeCliError(
-                "Claude is not logged in. Open a terminal, run `claude`, sign in, then try again.",
+                f"Claude is not logged in. {login_fix()}",
                 "not_logged_in",
             )
         )

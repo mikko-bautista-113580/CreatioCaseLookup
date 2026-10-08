@@ -55,6 +55,7 @@ WHY: dict[str, str] = {
     "playwright": "Lets Log in with Creatio… open a browser and save the session cookies for you.",
     "browser": "The browser that Log in with Creatio… opens for you to sign in.",
     "claude": "Powers AI analysis, fix plans and publishing artifacts.",
+    "claudelogin": "Claude Code needs your Claude login to run; its usage counts against your own subscription.",
 }
 
 
@@ -193,6 +194,18 @@ def check_claude() -> dict[str, Any]:
                   "Install it (npm i -g @anthropic-ai/claude-code), run `claude` once to sign in, then restart the app.")
 
 
+def check_claude_login() -> dict[str, Any]:
+    from .claude_run import claude_login, login_fix
+
+    label = "Claude signed in"
+    how = claude_login()
+    if how:
+        return _check("claudelogin", "Features", label, "ok", how)
+    return _check("claudelogin", "Features", label, "warn",
+                  "Claude Code has no login, so AI analysis, fix plans and publishing artifacts will fail.",
+                  login_fix())
+
+
 def check_port(host: str, port: int) -> dict[str, Any]:
     label = f"Port {port} is free"
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -220,6 +233,8 @@ async def run_checks(include_port: bool = False, host: str = "127.0.0.1", port: 
     if include_connection:
         checks.append(await check_connection(env))
     checks += [check_allowlist(env), check_playwright(), check_browser(), check_claude()]
+    if checks[-1]["status"] == "ok":
+        checks.append(check_claude_login())
     return {"checks": checks, "summary": summarize(checks)}
 
 

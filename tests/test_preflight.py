@@ -51,6 +51,33 @@ def test_sign_in_accepts_cookies_or_service_account():
     assert preflight.check_sign_in(blank_env())["status"] == "warn"
 
 
+def test_claude_login_sources(monkeypatch, tmp_path):
+    for k in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CONTAINER_APP_NAME"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(preflight.sys, "platform", "win32")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+
+    c = preflight.check_claude_login()
+    assert c["status"] == "warn" and "run `claude`" in c["fix"]
+
+    (tmp_path / ".credentials.json").write_text("{}")
+    assert preflight.check_claude_login()["status"] == "ok"
+
+    (tmp_path / ".credentials.json").unlink()
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-x")
+    assert "subscription token" in preflight.check_claude_login()["detail"]
+
+
+def test_claude_login_fix_in_azure(monkeypatch, tmp_path):
+    for k in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(preflight.sys, "platform", "linux")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("CONTAINER_APP_NAME", "ca-creatiocl-dev-lester")
+    c = preflight.check_claude_login()
+    assert c["status"] == "warn" and "setup-claude.ps1" in c["fix"]
+
+
 def test_connection_skipped_without_base_url():
     assert asyncio.run(preflight.check_connection(blank_env()))["status"] == "skip"
 
