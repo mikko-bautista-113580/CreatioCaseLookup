@@ -303,6 +303,8 @@ PAGE = """<!doctype html>
 const btn = document.getElementById("browserLoginBtn");
 const status = document.getElementById("status");
 function say(msg, err) { status.textContent = msg; status.className = err ? "err" : ""; }
+// The viewer tab is opened by vnc-helper.js (injected in Azure); close it once sign-in ends
+function closeViewer() { if (window.cclCloseViewer) window.cclCloseViewer(); }
 btn.addEventListener("click", async () => {
   btn.disabled = true;
   say("Starting…");
@@ -321,8 +323,8 @@ btn.addEventListener("click", async () => {
         const ev = (block.match(/^event: (.*)$/m) || [])[1];
         const data = JSON.parse((block.match(/^data: (.*)$/m) || [, "{}"])[1]);
         if (ev === "progress") say(data.message);
-        else if (ev === "error") { say(data.message, true); ended = true; }
-        else if (ev === "done") { say("Welcome, " + data.name + ". Opening your workspace…"); location.href = data.enter; ended = true; }
+        else if (ev === "error") { closeViewer(); say(data.message, true); ended = true; }
+        else if (ev === "done") { closeViewer(); say("Welcome, " + data.name + ". Opening your workspace…"); location.href = data.enter; ended = true; }
       }
     }
   } catch (e) { say(e.message, true); }
