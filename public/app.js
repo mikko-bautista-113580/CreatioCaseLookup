@@ -3500,7 +3500,9 @@ function renderSetup(checks, s) {
               <div class="setup-actions">
                 ${c.id === "allowlist" && c.missing?.length ? `<button class="secondary" data-add-entities="${esc([...(c.current || []), ...c.missing].join(", "))}">Add ${esc(c.missing.join(", "))}</button>` : ""}
                 ${c.goto && c.status !== "ok" ? `<button class="link" data-goto="${esc(c.goto)}">Open Settings →</button>` : ""}
+                ${c.id === "claudelogin" && c.connect ? `<button class="${c.status === "ok" ? "link" : ""}" data-claude-connect>${c.status === "ok" ? "Reconnect Claude" : "Connect Claude"}</button>` : ""}
               </div>
+              ${c.id === "claudelogin" && c.connect ? `<div class="claude-connect hidden"></div>` : ""}
             </div>
           </li>`).join("")}
       </ul>
@@ -3525,6 +3527,61 @@ function renderSetup(checks, s) {
       }
     })
   );
+
+  $$("#setupList [data-claude-connect]").forEach((b) => b.addEventListener("click", () => connectClaude(b)));
+}
+
+// Connect Claude: the server runs `claude setup-token` and hands back its
+// sign-in link; the user approves in their own browser and pastes the code.
+async function connectClaude(btn) {
+  const panel = btn.closest("li").querySelector(".claude-connect");
+  btn.disabled = true;
+  panel.classList.remove("hidden");
+  panel.innerHTML = '<span class="spinner"></span> Starting Claude sign-in…';
+  let url;
+  try {
+    ({ url } = await api("/api/claude-connect/start", { method: "POST" }));
+  } catch (e) {
+    panel.innerHTML = `<span class="status err">${esc(e.message)}</span>`;
+    btn.disabled = false;
+    return;
+  }
+  panel.innerHTML = `
+    <ol>
+      <li><a href="${esc(url)}" target="_blank" rel="noopener">Open the Claude sign-in page ↗</a> and approve with <b>your own</b> Claude account.</li>
+      <li>Copy the code the page shows, paste it here, and click Connect.</li>
+    </ol>
+    <div class="claude-connect-row">
+      <input type="text" placeholder="Paste the code" autocomplete="off" spellcheck="false" aria-label="Code from the Claude sign-in page">
+      <button>Connect</button>
+    </div>
+    <span class="status"></span>`;
+  const input = panel.querySelector("input");
+  const go = panel.querySelector("button");
+  const status = panel.querySelector(".status");
+  const submit = async () => {
+    go.disabled = input.disabled = true;
+    status.className = "status";
+    status.innerHTML = '<span class="spinner"></span> Connecting…';
+    try {
+      await api("/api/claude-connect/finish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: input.value }),
+      });
+      status.className = "status ok";
+      status.textContent = "Connected. AI features now run on your Claude subscription.";
+      setTimeout(loadSetup, 1200);
+    } catch (e) {
+      status.className = "status err";
+      status.textContent = e.message;
+      go.disabled = input.disabled = false;
+      btn.disabled = false;
+    }
+  };
+  go.addEventListener("click", submit);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+  input.focus();
 }
 $("#setupRecheck").addEventListener("click", loadSetup);
 

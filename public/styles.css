@@ -747,3 +747,7 @@ td.row-actions { white-space: nowrap; display: flex; gap: 0.3rem; align-items: c
 .setup-fix::before { content: "Fix: "; font-weight: 600; }
 .setup-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin-top: 0.35rem; }
 .setup-actions:empty { display: none; }
+.claude-connect { margin-top: 0.5rem; padding: 0.6rem 0.75rem; border: 1px solid var(--line); border-radius: 6px; font-size: 0.9rem; }
+.claude-connect ol { margin: 0 0 0.5rem; padding-left: 1.2rem; }
+.claude-connect-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.claude-connect-row input { flex: 1 1 16rem; min-width: 0; }

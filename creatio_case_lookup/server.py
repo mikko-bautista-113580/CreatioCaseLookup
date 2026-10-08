@@ -441,6 +441,30 @@ async def api_preflight(request: Request) -> Response:
     return send_json(200, await run_checks())
 
 
+# Setup tab: Connect Claude. Runs `claude setup-token` for the user (see
+# claude_connect.py): start returns the sign-in link, finish takes the code.
+@route("POST", "/api/claude-connect/start")
+async def api_claude_connect_start(request: Request) -> Response:
+    from . import claude_connect
+
+    try:
+        return send_json(200, {"url": await asyncio.to_thread(claude_connect.start)})
+    except claude_connect.ConnectError as e:
+        return send_json(400, {"error": "server", "message": str(e)})
+
+
+@route("POST", "/api/claude-connect/finish")
+async def api_claude_connect_finish(request: Request) -> Response:
+    from . import claude_connect
+
+    body = await read_body(request)
+    try:
+        await asyncio.to_thread(claude_connect.finish, str(body.get("code") or ""))
+    except claude_connect.ConnectError as e:
+        return send_json(400, {"error": "server", "message": str(e)})
+    return send_json(200, {"ok": True})
+
+
 @route("GET", "/api/test-auth")
 async def api_test_auth(request: Request) -> Response:
     return send_json(200, await test_connection())

@@ -195,13 +195,13 @@ def claude_login() -> str | None:
 
 
 def login_fix() -> str:
-    """What to do when Claude isn't signed in. Azure Container Apps set
-    CONTAINER_APP_NAME; there the container can't sign in interactively, so each
-    developer stores their own token with the infra repo's setup-claude.ps1."""
-    if os.environ.get("CONTAINER_APP_NAME"):
-        return ("This Azure app uses Claude on your own subscription and needs your token once. On your PC, "
-                "in the creatio-case-lookup-infra folder, run: .\\setup-claude.ps1 -Developer <your name>, "
-                "then try again.")
+    """What to do when Claude isn't signed in. Where there's no terminal to run
+    `claude` in (Linux/macOS server, e.g. the Azure container), the Setup tab's
+    Connect Claude button runs `claude setup-token` for the user."""
+    from .claude_connect import supported
+
+    if supported():
+        return "Open the Setup tab and click Connect Claude to sign in with your own Claude account."
     return "Open a terminal, run `claude`, sign in, then try again."
 
 

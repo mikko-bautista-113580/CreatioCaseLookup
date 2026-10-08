@@ -52,13 +52,16 @@ def test_sign_in_accepts_cookies_or_service_account():
 
 
 def test_claude_login_sources(monkeypatch, tmp_path):
-    for k in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CONTAINER_APP_NAME"):
+    from creatio_case_lookup import claude_connect
+
+    for k in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setattr(preflight.sys, "platform", "win32")
+    monkeypatch.setattr(claude_connect, "supported", lambda: False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
 
     c = preflight.check_claude_login()
-    assert c["status"] == "warn" and "run `claude`" in c["fix"]
+    assert c["status"] == "warn" and "run `claude`" in c["fix"] and c["connect"] is False
 
     (tmp_path / ".credentials.json").write_text("{}")
     assert preflight.check_claude_login()["status"] == "ok"
@@ -68,14 +71,16 @@ def test_claude_login_sources(monkeypatch, tmp_path):
     assert "subscription token" in preflight.check_claude_login()["detail"]
 
 
-def test_claude_login_fix_in_azure(monkeypatch, tmp_path):
+def test_claude_login_offers_connect_button_where_supported(monkeypatch, tmp_path):
+    from creatio_case_lookup import claude_connect
+
     for k in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setattr(preflight.sys, "platform", "linux")
+    monkeypatch.setattr(claude_connect, "supported", lambda: True)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
-    monkeypatch.setenv("CONTAINER_APP_NAME", "ca-creatiocl-dev-lester")
     c = preflight.check_claude_login()
-    assert c["status"] == "warn" and "setup-claude.ps1" in c["fix"]
+    assert c["status"] == "warn" and c["connect"] is True and "Connect Claude" in c["fix"]
 
 
 def test_connection_skipped_without_base_url():

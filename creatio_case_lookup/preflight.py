@@ -195,15 +195,22 @@ def check_claude() -> dict[str, Any]:
 
 
 def check_claude_login() -> dict[str, Any]:
-    from .claude_run import claude_login, login_fix
+    from .claude_connect import supported
+    from .claude_run import claude_login
 
     label = "Claude signed in"
     how = claude_login()
+    # connect: the Setup tab offers the Connect Claude button (claude setup-token)
     if how:
-        return _check("claudelogin", "Features", label, "ok", how)
+        return _check("claudelogin", "Features", label, "ok", how, connect=supported())
+    if supported():
+        fix = ("Click Connect Claude, sign in with your Claude account on the page that opens, "
+               "then paste the code it shows back here.")
+    else:
+        fix = "Open a terminal, run `claude`, sign in, then click Check again."
     return _check("claudelogin", "Features", label, "warn",
                   "Claude Code has no login, so AI analysis, fix plans and publishing artifacts will fail.",
-                  login_fix())
+                  fix, connect=supported())
 
 
 def check_port(host: str, port: int) -> dict[str, Any]:
