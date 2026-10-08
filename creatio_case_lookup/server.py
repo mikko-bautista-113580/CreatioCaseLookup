@@ -92,6 +92,7 @@ from .claude_run import (
 from .lifecycle import LifecycleError, groups_for_owner, lifecycle_allowed, lifecycle_sample, validate_request
 from .lifecycle_export import build_report_html, build_xlsx, publish_report
 from .preflight import run_checks
+from .creatio_identity import USER_NAME_KEY, remember_user_name
 from .fix_plan import (
     FixPlanError,
     apply_plan,
@@ -379,15 +380,24 @@ def user_full_name(display: str | None = None) -> str:
     return name
 
 
-_USER_NAME: str | None = None
+_WINDOWS_NAME: str | None = None
+
+
+def example_user_name() -> str:
+    """The name for the "e.g. …" placeholders: the signed-in Creatio user (saved
+    on each Creatio sign-in as CREATIO_USER_NAME), else the Windows user."""
+    global _WINDOWS_NAME
+    saved = read_env_file().get(USER_NAME_KEY, "").strip()
+    if saved:
+        return user_full_name(saved)
+    if _WINDOWS_NAME is None:  # the Windows user doesn't change while the app runs
+        _WINDOWS_NAME = user_full_name()
+    return _WINDOWS_NAME
 
 
 # Static config the UI needs to render its controls.
 @route("GET", "/api/meta")
 async def api_meta(request: Request) -> Response:
-    global _USER_NAME
-    if _USER_NAME is None:  # the signed-in user doesn't change while the app runs
-        _USER_NAME = user_full_name()
     return send_json(
         200,
         {
@@ -400,7 +410,7 @@ async def api_meta(request: Request) -> Response:
             "workspacePaths": get_workspace_paths(),
             "workspaceCap": file_cap(),
             "workspaceCase": get_bound_case(),
-            "userName": _USER_NAME,
+            "userName": example_user_name(),
         },
     )
 
@@ -547,6 +557,9 @@ async def api_config_post(request: Request) -> Response:
         updates["CREATIO_BPMCSRF"] = v
     if (v := _nonblank(body, "loader")) is not None:
         updates["CREATIO_BPMLOADER"] = v
+    # The sign-in gate passes the Creatio user's name along with the cookies
+    if (v := _nonblank(body, "userName")) is not None:
+        updates[USER_NAME_KEY] = v
 
     write_env_file(updates)
 
@@ -558,7 +571,15 @@ async def api_config_post(request: Request) -> Response:
 
     # Validate the (possibly new) cookies right away.
     test = await test_connection()
+    # New session cookies: note whose they are, for the "e.g. …" name placeholders
+    if test.get("ok") and "CREATIO_ASPXAUTH" in updates and USER_NAME_KEY not in updates:
+        await remember_user_name(_current_base_url(), resolve_cookie_env())
     return send_json(200, {"saved": True, "restartNeeded": restart_needed, "connection": test})
+
+
+def _current_base_url() -> str:
+    """The base URL as saved now (Settings may have changed it since start-up)."""
+    return re.sub(r"/+$", "", read_env_file().get("CREATIO_BASE_URL") or BASE_URL or "")
 
 
 # ---------------------------------------------------------------------------
@@ -1188,7 +1209,10 @@ async def handle_browser_login(request: Request) -> Response:
                 if not connection.get("ok"):
                     await asyncio.sleep(1.5)
                     connection = await test_connection()
-                q.put_nowait(sse("done", {"connection": connection}))
+                if connection.get("ok"):
+                    # Whose session this is, for the "e.g. …" name placeholders
+                    await remember_user_name(base_url, cookies)
+                q.put_nowait(sse("done", {"connection": connection, "userName": example_user_name()}))
             except Exception as e:  # noqa: BLE001
                 cancelled = isinstance(e, LoginCancelledError)
                 q.put_nowait(sse("error", {"kind": "cancelled" if cancelled else "server", "message": str(e)}))

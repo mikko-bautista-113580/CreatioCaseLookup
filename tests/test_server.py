@@ -125,7 +125,7 @@ def test_user_full_name(display, full):
 
 
 def test_meta_user_name_from_os(client, monkeypatch):
-    monkeypatch.setattr(server, "_USER_NAME", None)
+    monkeypatch.setattr(server, "_WINDOWS_NAME", None)
     monkeypatch.setattr(server, "_display_name", lambda: "Holland, Melissa")
     assert client.get("/api/meta").json()["userName"] == "Melissa Holland"
 

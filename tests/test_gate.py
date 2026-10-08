@@ -87,8 +87,9 @@ def test_login_flow_with_fake_browser(monkeypatch):
 
     handed = {}
 
-    async def fake_hand_off(name, cookies):
+    async def fake_hand_off(name, cookies, who=None):
         handed[name] = cookies
+        handed["who"] = who
         return {"connection": {"ok": True}}
 
     monkeypatch.setattr(browser_login, "login_via_browser", fake_login)

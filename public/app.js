@@ -24,6 +24,15 @@ function exampleName() {
   return `e.g. ${state.meta?.userName || "Jane Smith"}`;
 }
 
+// After a Creatio sign-in: show that user's name in the open "e.g. …" fields
+// (the others pick it up the next time they render).
+function setUserName(name) {
+  if (!state.meta) return;
+  state.meta.userName = name;
+  if (state.mode === "owner") $("#valueInput").placeholder = exampleName();
+  $("#lcOwner").placeholder = exampleName();
+}
+
 async function api(path, opts) {
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
@@ -1049,6 +1058,7 @@ async function saveConfig() {
     s.textContent = msg;
     s.className = "status " + (data.connection && data.connection.ok ? "ok" : "err");
     loadConfig();
+    if (data.connection && data.connection.ok) api("/api/meta").then((m) => setUserName(m.userName)).catch(() => {});
   } catch (e) {
     s.textContent = e.message;
     s.className = "status err";
@@ -1106,6 +1116,7 @@ async function browserLogin() {
           s.className = "status err";
         }
         loadConfig();
+        if (d.userName) setUserName(d.userName);
       },
       error: (d) => {
         settled = true;

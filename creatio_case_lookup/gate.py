@@ -42,10 +42,11 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 
+from .creatio_identity import creatio_identity, identity_fields  # noqa: F401 — identity_fields re-exported for tests
+
 ID_COOKIE = "ccl_id"
 VIEWER_COOKIE = "ccl_gate"
 TICKET_TTL_S = 120
-_GUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -89,63 +90,6 @@ def id_cookie(name: str, now: float | None = None) -> tuple[str, int]:
 # ---------------------------------------------------------------------------
 # Who is this? (Creatio first, then the Microsoft account typed at SSO)
 # ---------------------------------------------------------------------------
-def identity_fields(data: Any, depth: int = 0) -> dict[str, str]:
-    """Pull contact id / name / login / email out of a Creatio user-info reply,
-    whatever its nesting (some replies wrap a JSON string in a ``...Result``)."""
-    keys = {"contactid": "contactId", "contactname": "name", "username": "login", "login": "login",
-            "email": "email"}
-    out: dict[str, str] = {}
-    if depth > 4:
-        return out
-    if isinstance(data, str):
-        try:
-            data = json.loads(data)
-        except ValueError:
-            return out
-    if isinstance(data, dict):
-        for k, v in data.items():
-            key = keys.get(str(k).lower())
-            if key and isinstance(v, str) and v.strip() and key not in out:
-                out[key] = v.strip()
-            elif isinstance(v, (dict, list, str)):
-                for kk, vv in identity_fields(v, depth + 1).items():
-                    out.setdefault(kk, vv)
-    elif isinstance(data, list):
-        for item in data[:3]:
-            for kk, vv in identity_fields(item, depth + 1).items():
-                out.setdefault(kk, vv)
-    return out
-
-
-async def creatio_identity(base_url: str, cookies: dict[str, str]) -> dict[str, str]:
-    jar = f".ASPXAUTH={cookies['aspx']}; BPMCSRF={cookies['csrf']}"
-    if cookies.get("loader"):
-        jar += f"; BPMLOADER={cookies['loader']}"
-    headers = {"Accept": "application/json", "Content-Type": "application/json", "Cookie": jar,
-               "BPMCSRF": cookies["csrf"], "ForceUseSession": "true"}
-    who: dict[str, str] = {}
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30) as c:
-        try:
-            r = await c.post(f"{base_url}/0/ServiceModel/UserInfoService.svc/getCurrentUserInfo",
-                             headers=headers, content="{}")
-            if r.is_success:
-                who = identity_fields(r.json())
-        except (httpx.HTTPError, ValueError):
-            pass
-        cid = who.get("contactId", "")
-        if _GUID_RE.match(cid):
-            try:
-                r = await c.get(f"{base_url}/0/odata/Contact({cid})?$select=Name,Email", headers=headers)
-                if r.is_success:
-                    j = r.json()
-                    if j.get("Email"):
-                        who["email"] = j["Email"].strip()
-                    who.setdefault("name", (j.get("Name") or "").strip())
-            except (httpx.HTTPError, ValueError):
-                pass
-    return {k: v for k, v in who.items() if v}
-
-
 def microsoft_logins(request: Any) -> list[str]:
     """The account typed on Microsoft's sign-in page during Creatio's Azure SSO."""
     try:
@@ -167,12 +111,15 @@ def match(who: dict[str, str], ms: list[str]) -> str | None:
     return None
 
 
-async def hand_off(name: str, cookies: dict[str, str]) -> dict[str, Any]:
-    """Give the Creatio session to that developer's own app (same call as its Settings → Save)."""
+async def hand_off(name: str, cookies: dict[str, str], who: dict[str, str] | None = None) -> dict[str, Any]:
+    """Give the Creatio session to that developer's own app (same call as its
+    Settings → Save), with the Creatio user's name for its "e.g. …" placeholders."""
     host = f"{os.environ.get('BACKEND_PREFIX', '')}{name}{os.environ.get('BACKEND_SUFFIX', '')}"
     body = {"aspx": cookies["aspx"], "csrf": cookies["csrf"]}
     if cookies.get("loader"):
         body["loader"] = cookies["loader"]
+    if who and who.get("name"):
+        body["userName"] = who["name"]
     # A scaled-to-zero app needs a minute or two to start
     async with httpx.AsyncClient(timeout=240) as c:
         r = await c.post(f"http://{host}/api/config", json=body)
@@ -249,7 +196,7 @@ async def login(request: Request) -> Response:
                                                 "who": who, "microsoft": ms}))
                     return
                 progress("Opening your workspace…")
-                result = await hand_off(name, cookies)
+                result = await hand_off(name, cookies, who)
                 ticket = secrets.token_urlsafe(24)
                 _tickets[ticket] = (name, time.time() + TICKET_TTL_S)
                 q.put_nowait(_sse("done", {"name": name, "enter": f"/_gate/enter?t={ticket}",
