@@ -751,3 +751,9 @@ td.row-actions { white-space: nowrap; display: flex; gap: 0.3rem; align-items: c
 .claude-connect ol { margin: 0 0 0.5rem; padding-left: 1.2rem; }
 .claude-connect-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 .claude-connect-row input { flex: 1 1 16rem; min-width: 0; }
+.dev-form { display: grid; gap: 0.6rem; margin: 0.4rem 0 0.6rem; }
+.dev-form label { display: grid; gap: 0.2rem; font-size: 0.9rem; font-weight: 600; }
+.dev-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+.dev-table th, .dev-table td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+.dev-log { max-height: 16rem; overflow: auto; font-size: 0.78rem; border: 1px solid var(--line); border-radius: 6px; padding: 0.5rem; white-space: pre-wrap; }
+.dev-code { font-family: ui-monospace, Consolas, monospace; font-size: 1.05rem; letter-spacing: 0.08em; }

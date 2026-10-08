@@ -62,6 +62,7 @@ function switchTab(name) {
   else if (name === "workspace") loadWorkspace();
   else if (name === "lifecycle") lcCheckAllowed();
   else if (name === "setup") loadSetup();
+  else if (name === "developers") loadDevelopers();
 }
 $$(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
 document.addEventListener("click", (e) => {
@@ -3609,12 +3610,108 @@ async function connectClaude(btn) {
 $("#setupRecheck").addEventListener("click", loadSetup);
 
 // ---------------------------------------------------------------------------
+// Developers tab (admin's app only): sign in to Azure, then add people
+// ---------------------------------------------------------------------------
+async function loadDevelopers() {
+  const box = $("#devAzure");
+  box.innerHTML = '<span class="spinner"></span> Checking…';
+  let d;
+  try {
+    d = await api("/api/admin/status");
+  } catch (e) {
+    box.innerHTML = `<p class="status err">${esc(e.message)}</p>`;
+    return;
+  }
+  const signedIn = !!d.azureUser;
+  $("#devListCard").classList.toggle("hidden", !signedIn || !!d.error);
+  $("#devAddCard").classList.toggle("hidden", !signedIn || !!d.error);
+  if (!signedIn) {
+    box.innerHTML = `<p>Adding someone creates Azure resources, so sign in to Azure with your own account first
+      (once each time this app starts).</p>
+      <div class="actions"><button id="devAzureBtn">Sign in to Azure</button><span id="devAzureStatus" class="status"></span></div>`;
+    $("#devAzureBtn").addEventListener("click", azureSignIn);
+    return;
+  }
+  box.innerHTML = `<p class="status ok">Signed in to Azure as ${esc(d.azureUser)}.</p>` +
+    (d.error ? `<p class="status err">${esc(d.error)}</p>` : "");
+  if (d.error) return;
+  $("#devList").innerHTML = Object.entries(d.developers || {}).sort().map(([n, ids]) =>
+    `<tr><td>${esc(n)}</td><td>${(ids || []).map(esc).join("<br>")}</td></tr>`).join("");
+  $("#devCidrs").textContent = "Allowed IPs: " + ((d.allowed_cidrs || []).join(", ") || "none");
+}
+
+async function azureSignIn() {
+  const btn = $("#devAzureBtn");
+  const s = $("#devAzureStatus");
+  btn.disabled = true;
+  s.innerHTML = '<span class="spinner"></span> Starting…';
+  try {
+    const { url, code } = await api("/api/admin/azure-login", { method: "POST" });
+    s.className = "status";
+    s.innerHTML = `Open <a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)} ↗</a>, enter
+      <strong class="dev-code">${esc(code)}</strong> and sign in with your Nelnet account. Waiting…`;
+    for (let i = 0; i < 100; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const d = await api("/api/admin/status").catch(() => ({}));
+      if (d.azureUser) return loadDevelopers();
+    }
+    s.className = "status err";
+    s.textContent = "Timed out waiting for the Azure sign-in. Try again.";
+  } catch (e) {
+    s.className = "status err";
+    s.textContent = e.message;
+  }
+  btn.disabled = false;
+}
+
+$("#devAddBtn").addEventListener("click", async () => {
+  const name = $("#devName").value.trim().toLowerCase();
+  const emails = $("#devEmails").value.split(/[\s,;]+/).filter(Boolean);
+  const ip = $("#devIp").value.trim();
+  if (!confirm(`Create an app for "${name}" (${emails.join(", ")})?`)) return;
+  const btn = $("#devAddBtn");
+  const s = $("#devStatus");
+  const log = $("#devLog");
+  btn.disabled = true;
+  log.textContent = "";
+  log.classList.remove("hidden");
+  s.className = "status";
+  s.innerHTML = '<span class="spinner"></span> Starting…';
+  try {
+    const res = await fetch("/api/admin/developers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, emails, ip }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || `Failed (${res.status})`);
+    let ok = false;
+    await consumeSse(res.body, {
+      progress: (d) => { s.innerHTML = '<span class="spinner"></span> ' + esc(d.message); },
+      log: (d) => { log.textContent += d.message + "\n"; log.scrollTop = log.scrollHeight; },
+      done: () => { ok = true; },
+      error: (d) => { s.className = "status err"; s.textContent = d.message; },
+    });
+    if (ok) {
+      s.className = "status ok";
+      s.textContent = `Added ${name}. They can now open the link and log in with Creatio.`;
+      $("#devName").value = $("#devEmails").value = $("#devIp").value = "";
+      loadDevelopers();
+    }
+  } catch (e) {
+    s.className = "status err";
+    s.textContent = e.message;
+  }
+  btn.disabled = false;
+});
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 async function boot() {
   try {
     state.meta = await api("/api/meta");
     state.aiAvailable = !!state.meta.aiAvailable;
+    $("#developersTab").classList.toggle("hidden", !state.meta.admin);
     const label = state.meta.baseUrl || "not configured";
     $("#baseUrlLabel").textContent = "read-only · " + label;
     $("#footBase").textContent = label;

@@ -91,6 +91,7 @@ from .claude_run import (
 )
 from .lifecycle import LifecycleError, groups_for_owner, lifecycle_allowed, lifecycle_sample, validate_request
 from .lifecycle_export import build_report_html, build_xlsx, publish_report
+from . import admin
 from .preflight import run_checks
 from .creatio_identity import USER_NAME_KEY, remember_user_name
 from .fix_plan import (
@@ -411,6 +412,7 @@ async def api_meta(request: Request) -> Response:
             "workspaceCap": file_cap(),
             "workspaceCase": get_bound_case(),
             "userName": example_user_name(),
+            "admin": admin.enabled(),
         },
     )
 
@@ -1234,6 +1236,61 @@ async def handle_browser_login(request: Request) -> Response:
     task.add_done_callback(_BACKGROUND.discard)
 
     return _stream(_drain(q, heartbeat=False))
+
+
+# Developers tab (admin's app only, see admin.py). Elsewhere these don't exist.
+def _admin_off() -> Response | None:
+    return None if admin.enabled() else send_json(404, {"error": "server", "message": "Not found."})
+
+
+@route("GET", "/api/admin/status")
+async def api_admin_status(request: Request) -> Response:
+    if off := _admin_off():
+        return off
+    user = await admin.azure_account()
+    out: dict[str, Any] = {"azureUser": user}
+    if user:
+        try:
+            out.update(await admin.read_config())
+        except admin.AdminError as e:
+            out["error"] = str(e)
+    return send_json(200, out)
+
+
+@route("POST", "/api/admin/azure-login")
+async def api_admin_azure_login(request: Request) -> Response:
+    if off := _admin_off():
+        return off
+    try:
+        return send_json(200, await admin.start_azure_login())
+    except admin.AdminError as e:
+        return send_json(400, {"error": "server", "message": str(e)})
+
+
+@route("POST", "/api/admin/developers")
+async def api_admin_add_developer(request: Request) -> Response:
+    if off := _admin_off():
+        return off
+    body = await read_body(request)
+    emails = body.get("emails") if isinstance(body.get("emails"), list) else []
+    q: asyncio.Queue = asyncio.Queue()
+
+    async def run() -> None:
+        try:
+            async for kind, val in admin.add_developer(str(body.get("name") or ""), [str(e) for e in emails],
+                                                       str(body.get("ip") or "")):
+                q.put_nowait(sse(kind, {"message": val}))
+            q.put_nowait(sse("done", {}))
+        except Exception as e:  # noqa: BLE001
+            q.put_nowait(sse("error", {"message": str(e) or e.__class__.__name__}))
+        finally:
+            q.put_nowait(_END)
+
+    # Keeps going if the tab is closed: a half-run apply is worse than a finished one
+    task = asyncio.ensure_future(run())
+    _BACKGROUND.add(task)
+    task.add_done_callback(_BACKGROUND.discard)
+    return _stream(_drain(q, heartbeat=True))
 
 
 # AI analysis of a set of cases — streams the model output via SSE.

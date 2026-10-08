@@ -25,6 +25,7 @@
         <button class="tab" data-tab="workspace">Workspace</button>
         <button class="tab" data-tab="lifecycle">Lifecycle</button>
         <button class="tab" data-tab="settings">Settings</button>
+        <button class="tab hidden" data-tab="developers" id="developersTab">Developers</button>
       </nav>
     </header>
 
@@ -277,6 +278,39 @@
       </section>
 
       <section id="lcResults" class="results"></section>
+    </main>
+
+    <!-- ========================== DEVELOPERS ========================== -->
+    <!-- Admin's app only (CCL_ADMIN=1): add people to Case Lookup. -->
+    <main id="tab-developers" class="tab-panel">
+      <section class="card">
+        <h2>Developers</h2>
+        <p class="hint">
+          Each developer gets their own app, Creatio login and Claude connection. They're recognised by the
+          email they use to log in to Creatio. Only you see this tab.
+        </p>
+        <div id="devAzure"></div>
+      </section>
+      <section class="card hidden" id="devListCard">
+        <h2>Current developers</h2>
+        <table class="dev-table"><thead><tr><th>Name</th><th>Emails</th></tr></thead><tbody id="devList"></tbody></table>
+        <p class="hint" id="devCidrs"></p>
+      </section>
+      <section class="card hidden" id="devAddCard">
+        <h2>Add a developer</h2>
+        <div class="dev-form">
+          <label>Name <input type="text" id="devName" placeholder="e.g. maria" maxlength="12" autocomplete="off"></label>
+          <label>Creatio emails <input type="text" id="devEmails" placeholder="maria.santos@nelnet.net, 123456@nelnet.net" autocomplete="off"></label>
+          <label>Public IP <input type="text" id="devIp" placeholder="optional, e.g. 203.0.113.10 (from api.ipify.org)" autocomplete="off"></label>
+        </div>
+        <p class="hint">Use the email they sign in to Creatio with. If you're not sure, have them log in once:
+          the "not added yet" message shows it.</p>
+        <div class="actions">
+          <button id="devAddBtn">Add developer</button>
+          <span id="devStatus" class="status"></span>
+        </div>
+        <pre id="devLog" class="dev-log hidden"></pre>
+      </section>
     </main>
 
     <!-- ============================ SETTINGS ============================ -->

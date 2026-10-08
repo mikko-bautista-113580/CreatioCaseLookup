@@ -105,7 +105,7 @@ def test_meta_shape(client, sandbox):
     assert r.headers["content-type"] == "application/json; charset=utf-8"
     d = r.json()
     assert list(d) == ["baseUrl", "allowlist", "maxTop", "statuses", "openActive", "aiAvailable",
-                       "workspacePaths", "workspaceCap", "workspaceCase", "userName"]
+                       "workspacePaths", "workspaceCap", "workspaceCase", "userName", "admin"]
     assert d["aiAvailable"] is False
     assert d["workspacePaths"] == [str(sandbox["ws"])]
     assert d["workspaceCap"] == 10
